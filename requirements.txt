@@ -1,0 +1,4 @@
+openai>=1.50.0
+pillow>=10.4.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
