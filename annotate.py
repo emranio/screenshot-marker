@@ -84,14 +84,18 @@ def main(argv: list[str] | None = None) -> int:
         refine=not args.no_refine,
     )
 
-    print(f"Wrote {result.output_path}")
-    print(f"Resolved {len(result.annotations) - len(result.unresolved)}/{len(result.annotations)} requests.")
-    if result.unresolved:
-        print("Unresolved queries:", file=sys.stderr)
-        for q in result.unresolved:
-            print(f"  - {q}", file=sys.stderr)
-        if not args.allow_unresolved:
-            return 1
+    # Structured result on stdout (always JSON), human summary on stderr.
+    print(result.model_dump_json(indent=2))
+
+    resolved = len(result.annotations) - len(result.unresolved)
+    total = len(result.annotations)
+    print(
+        f"Wrote {result.output_path}  ({resolved}/{total} resolved, "
+        f"{len(result.unresolved)} unresolved)",
+        file=sys.stderr,
+    )
+    if result.unresolved and not args.allow_unresolved:
+        return 1
     return 0
 
 

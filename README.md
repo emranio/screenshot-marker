@@ -1,0 +1,275 @@
+# screenshot-marker
+
+A small Python tool that takes a UI screenshot plus one or more **plain-English
+annotation requests** and produces an annotated image — red rectangles, arrows,
+and labelled callouts — using a vision LLM (default: GPT‑5.4) for spatial
+reasoning and Pillow for the drawing.
+
+```text
+test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
+            + "rectangle around the Annotations tab labeled 'Active tab'"
+                                ↓
+                test_2_annotated.png  (rounded translucent rectangles,
+                                       arrows, blurred-pill labels)
+```
+
+- One LLM round‑trip per call regardless of how many queries you pass.
+- Free‑form natural‑language queries — the model both parses intent and
+  locates the region.
+- Modular: vision call, JSON parsing, drawing, and CLI are separate units.
+- No HTTP server, no web UI — just a Python module and a thin CLI.
+- Always returns structured JSON (Python API and CLI both).
+- Safety: when the model can't confidently locate a target, the request is
+  reported as unresolved and **nothing is drawn** — no junk annotations.
+
+---
+
+## Install
+
+Requires Python 3.10+ (3.13 recommended) and an OpenAI API key.
+
+```bash
+git clone <this repo>
+cd screenshot-marker
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Create a `.env` (or export environment variables):
+
+```env
+# .env
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-5.4          # optional; defaults to gpt-5.4
+```
+
+You can change `OPENAI_MODEL` any time — both the CLI and the Python API
+pick it up automatically. Useful values: `gpt-5.4`, `gpt-5.4-mini`,
+`gpt-4o`, `gpt-4o-mini`. Heavier models are more accurate at locating
+small UI elements; mini models are cheaper and faster.
+
+---
+
+## CLI usage
+
+```bash
+.venv/bin/python annotate.py \
+  --image test_1.jpeg \
+  --query "red box on the customer info section, label 'Customer Details'" \
+  --query "rectangle around the payment timeline labeled 'Activity Log'"
+```
+
+Output: writes `test_1_annotated.png` next to the input by default, prints
+the full JSON result to **stdout**, and a one‑line human summary to
+**stderr**.
+
+```text
+$ python annotate.py --image test_2.webp \
+    --query "rectangle around the Annotations tab labeled 'Active tab'" \
+  > result.json
+Wrote test_2_annotated.png  (1/1 resolved, 0 unresolved)
+$ jq '.annotations[0].bbox' result.json
+{
+  "x": 229,
+  "y": 96,
+  "width": 83,
+  "height": 51
+}
+```
+
+### CLI flags
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--image PATH` | (required) | Input image. JPEG, PNG, or WebP. |
+| `--output PATH` | `<image_dir>/<stem>_annotated.png` | Where to write the annotated PNG. Optional. |
+| `--query "..."` | — | A natural‑language annotation request. Repeatable. |
+| `--queries-file PATH` | — | A JSON file containing a list of query strings. Combine with `--query` if you want. |
+| `--model NAME` | `$OPENAI_MODEL` or `gpt-5.4` | Override the vision model for this run. |
+| `--color HEX` | `#DC2626` | Default annotation color. |
+| `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
+| `--font PATH` | system default | Path to a TrueType font file. |
+| `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
+| `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
+
+---
+
+## Python API
+
+```python
+from marker import annotate
+
+result = annotate(
+    image_path="test_1.jpeg",
+    queries=[
+        "red box on the customer info section, label 'Customer Details'",
+        "rectangle around the payment timeline labeled 'Activity Log'",
+    ],
+    # output_path defaults to <image_dir>/<stem>_annotated.png
+    # all kwargs below are optional:
+    model="gpt-5.4",
+    color="#DC2626",
+    stroke_width=None,
+    font_path=None,
+    refine=True,
+    refine_padding=0.15,
+)
+
+# AnnotationResult is a Pydantic model — JSON-shaped:
+print(result.model_dump_json(indent=2))
+print(result.output_path)         # Path to the written PNG
+print(len(result.unresolved))     # number of queries the model couldn't resolve
+```
+
+### Result schema
+
+The Python API and the CLI both yield the same JSON structure:
+
+```jsonc
+{
+  "output_path": "test_1_annotated.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "red box on the customer info section, label 'Customer Details'",
+      "target_description": "Customer Information card on the right side",
+      "label_text": "Customer Details",
+      "bbox": { "x": 1247, "y": 412, "width": 1180, "height": 320 },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "annotate the export button",
+      "target_description": "",
+      "label_text": null,
+      "bbox": null,
+      "color": null,
+      "not_found": true,                                 // ← safety
+      "notes": "No 'export' button is visible in this screenshot."
+    }
+  ],
+  "unresolved": ["annotate the export button"]
+}
+```
+
+`bbox` is in absolute pixel coordinates of the input image. `null` means the
+request was not resolved.
+
+---
+
+## Writing good queries
+
+Queries are free‑form English. The vision model extracts three things from
+each query: (a) the target element, (b) the optional caption text, and (c)
+the optional color.
+
+| You write | Model extracts |
+|---|---|
+| `red box on the customer info card, label 'Customer Details'` | target = customer info card · label_text = "Customer Details" · color = default red |
+| `rectangle around the payment timeline labeled 'Activity Log'` | target = payment timeline · label_text = "Activity Log" |
+| `green outline around the 'Save' button` | target = "Save" button · color = `#22C55E` |
+| `highlight the search bar` | target = search bar · label_text = null (no caption) |
+| `box on the avatar at top‑right` | target = top‑right avatar |
+
+Tips:
+
+- **Quote the caption** if you want a label drawn (`labeled 'X'`,
+  `label "X"`, `with caption X`). Otherwise just the rectangle is drawn.
+- **Use distinguishing words** — "the **payment timeline** card" beats
+  "the timeline" when there are multiple timeline‑like elements on screen.
+- Specifying `red` is redundant (it's the default). Mention a color only
+  when you want a non‑default one (`green`, `blue`, `#1F8FFF`).
+
+---
+
+## How it works
+
+```text
+   image  ─┐
+           ▼
+   ┌──── encode_image ────┐
+   │  base64 + dimensions │
+   └──────────┬───────────┘
+              ▼
+   ┌──── call_vision (1 LLM call, all queries) ────┐
+   │  → JSON: bbox, label_text, color per query     │
+   └──────────┬─────────────────────────────────────┘
+              ▼
+   ┌──── parse_response ────┐
+   │  validate, denormalise │
+   │  clamp, sanity-check   │  ← drops giant hallucinated bboxes
+   └──────────┬─────────────┘
+              ▼
+   ┌──── refine_bboxes (optional, parallel, 1 LLM call/bbox) ────┐
+   │  crop around each rough bbox + 15% padding,                  │
+   │  ask the model for a precise bbox in the crop,               │
+   │  map back to image coords                                    │
+   └──────────┬───────────────────────────────────────────────────┘
+              ▼
+   ┌──── render (Pillow) ────┐
+   │  rounded translucent rect│
+   │  blurred colored label   │
+   │  auto‑placed arrow       │
+   └──────────┬───────────────┘
+              ▼
+        annotated PNG
+```
+
+- **Two‑pass refinement** — each rough bbox is tightened by a second
+  per‑target LLM call on a cropped view of the image. This is what makes
+  edges line up with card borders on tall / dense screenshots. Disable
+  with `--no-refine` (or `refine=False` in Python) to halve the LLM cost.
+- **Sanity check** — if the model returns a bbox covering ≥90% of the
+  image area, that's the typical "I have no idea, here's the whole
+  thing" hallucination. The parser converts it to `not_found` so nothing
+  gets drawn.
+- **Auto‑arrow & label placement** — you don't tell the model where the
+  caption should go. The renderer picks bottom‑left under the bbox by
+  default and falls back to top‑left, bottom‑right, or top‑right when
+  there isn't room. The arrow is drawn from the label to the nearest
+  bbox edge.
+
+---
+
+## Module layout
+
+```text
+screenshot-marker/
+├── annotate.py             # CLI entry point
+├── marker/
+│   ├── __init__.py         # Public API: annotate()
+│   ├── vision.py           # OpenAI call, prompt, schema
+│   ├── parser.py           # JSON → typed annotations + sanity check
+│   ├── drawing.py          # Pillow rendering: rect, arrow, label, bg
+│   ├── models.py           # Pydantic schemas
+│   └── config.py           # Defaults + env loading
+├── requirements.txt
+└── .env.example
+```
+
+---
+
+## Tuning notes
+
+- **Bigger / denser screenshots benefit from refinement.** Leave it on.
+- **Low‑resolution screenshots** (under ~600px on the short edge) can lose
+  precision because both passes process them at low detail. Upscale before
+  feeding in if you need pixel‑perfect alignment.
+- **Mini models** (e.g. `gpt-5.4-mini`) work but are noticeably less
+  precise. They're good for batch jobs where coarse highlighting is fine.
+- **Stroke width** is auto‑scaled with image size. Override with `--stroke`
+  if you want it heavier or lighter.
+- **The label text uses white on a translucent colored pill**. Change the
+  pill / arrow color via `--color` (or `color=` in Python).
+
+---
+
+## Limitations
+
+- One image per `annotate()` call.
+- Vision models can still pick the wrong element on dense or visually
+  similar UI. Verify the output before publishing.
+- Very tall / wide screenshots (≫4000 px on either axis) cost more tokens
+  and may need refinement disabled if you hit OpenAI rate limits.
