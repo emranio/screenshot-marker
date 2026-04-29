@@ -15,6 +15,12 @@ def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
+# Bboxes covering a larger share of the image than this are almost always
+# "I have no idea, here's the whole thing" hallucinations. Treat them as
+# not_found rather than drawing a giant rectangle over the screenshot.
+MAX_BBOX_AREA_FRACTION = 0.90
+
+
 def _to_pixels_bbox(b: NormalizedBbox, width: int, height: int) -> Bbox | None:
     x = _clamp(round(b.x * width), 0, width - 1)
     y = _clamp(round(b.y * height), 0, height - 1)
@@ -23,6 +29,13 @@ def _to_pixels_bbox(b: NormalizedBbox, width: int, height: int) -> Bbox | None:
     if w <= 0 or h <= 0:
         return None
     return Bbox(x=x, y=y, width=w, height=h)
+
+
+def _bbox_looks_hallucinated(bbox: Bbox, image_w: int, image_h: int) -> bool:
+    image_area = image_w * image_h
+    if image_area <= 0:
+        return False
+    return (bbox.width * bbox.height) / image_area >= MAX_BBOX_AREA_FRACTION
 
 
 def _resolve_one(raw: RawAnnotation, width: int, height: int) -> Annotation:
@@ -40,6 +53,16 @@ def _resolve_one(raw: RawAnnotation, width: int, height: int) -> Annotation:
     bbox = _to_pixels_bbox(raw.bbox, width, height) if raw.bbox else None
     not_found = bbox is None
     notes = raw.notes
+
+    if bbox is not None and _bbox_looks_hallucinated(bbox, width, height):
+        not_found = True
+        bbox = None
+        pct = round(MAX_BBOX_AREA_FRACTION * 100)
+        notes = (
+            f"Model returned a bbox covering >={pct}% of the image — "
+            "treating as not found to avoid drawing junk over the screenshot."
+        )
+
     if not_found and not notes:
         notes = "Model returned no usable bbox."
 
