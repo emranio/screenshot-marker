@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from .models import Annotation, Bbox
 
@@ -28,11 +28,18 @@ def _load_font(font_path: Optional[str], size: int) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    h = hex_color.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+_DEFAULT_FALLBACK_RGB = (220, 38, 38)
+
+
+def _parse_color(spec: Optional[str], fallback: tuple[int, int, int] = _DEFAULT_FALLBACK_RGB) -> tuple[int, int, int]:
+    """Parse hex strings, CSS color names, or rgb(...) notation. Falls back on garbage input."""
+    if not spec:
+        return fallback
+    try:
+        rgba = ImageColor.getrgb(spec.strip())
+    except (ValueError, AttributeError):
+        return fallback
+    return rgba[:3]
 
 
 def _line_height(font: ImageFont.ImageFont) -> int:
@@ -355,7 +362,8 @@ def render(
             layouts.append(None)
             continue
 
-        color_rgb = _hex_to_rgb(ann.color or default_color)
+        default_rgb = _parse_color(default_color)
+        color_rgb = _parse_color(ann.color, fallback=default_rgb)
         _draw_translucent_rectangle(overlay, ann.bbox, color_rgb, stroke_width)
 
         if ann.label_text and ann.label_text.strip():
