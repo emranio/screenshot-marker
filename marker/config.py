@@ -5,7 +5,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_MODEL = "gpt-5.4"
+_FALLBACK_MODEL = "gpt-5.4"
+
+
+def load_env() -> None:
+    """Best-effort .env loading. Silent if python-dotenv isn't installed."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
+load_env()
+
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", _FALLBACK_MODEL)
 DEFAULT_COLOR = "#DC2626"
 DEFAULT_FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -23,15 +37,6 @@ class RenderDefaults:
     color: str = DEFAULT_COLOR
     stroke_width: Optional[int] = None
     font_path: Optional[str] = None
-
-
-def load_env() -> None:
-    """Best-effort .env loading. Silent if python-dotenv isn't installed."""
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    load_dotenv()
 
 
 def get_api_key() -> str:

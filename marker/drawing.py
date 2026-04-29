@@ -8,9 +8,10 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from .models import Annotation, Bbox
 
 STROKE_ALPHA = 200
-ARROW_ALPHA = 230
-LABEL_BG_ALPHA = 170
+ARROW_ALPHA = 215
+LABEL_BG_ALPHA = 215
 LABEL_TEXT_ALPHA = 255
+LABEL_TEXT_RGB = (255, 255, 255)
 
 MIN_FONT_SIZE = 14
 
@@ -193,8 +194,10 @@ def _draw_translucent_rectangle(
     draw = ImageDraw.Draw(overlay)
     x0, y0 = bbox.x, bbox.y
     x1, y1 = bbox.x + bbox.width, bbox.y + bbox.height
-    draw.rectangle(
+    radius = max(4, stroke)
+    draw.rounded_rectangle(
         [(x0, y0), (x1, y1)],
+        radius=radius,
         outline=color_rgb + (STROKE_ALPHA,),
         width=stroke,
     )
@@ -292,7 +295,7 @@ def _render_label_with_blur_bg(
 
     bg_w = bg_x1 - bg_x0
     bg_h = bg_y1 - bg_y0
-    radius = min(pad_x + pad_y, max(8, bg_h // 3))
+    radius = max(4, min(pad_x, pad_y))
 
     crop = canvas.crop((bg_x0, bg_y0, bg_x1, bg_y1))
     blurred = crop.filter(ImageFilter.GaussianBlur(radius=blur_radius))
@@ -307,7 +310,7 @@ def _render_label_with_blur_bg(
     ImageDraw.Draw(tint).rounded_rectangle(
         [(0, 0), (bg_w - 1, bg_h - 1)],
         radius=radius,
-        fill=(255, 255, 255, LABEL_BG_ALPHA),
+        fill=color_rgb + (LABEL_BG_ALPHA,),
     )
     canvas.paste(tint, (bg_x0, bg_y0), tint)
 
@@ -320,7 +323,7 @@ def _render_label_with_blur_bg(
             (lx, cy),
             line,
             font=font,
-            fill=color_rgb + (LABEL_TEXT_ALPHA,),
+            fill=LABEL_TEXT_RGB + (LABEL_TEXT_ALPHA,),
         )
         cy += line_h + spacing
 

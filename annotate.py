@@ -3,9 +3,7 @@
 
 Examples:
 
-  python annotate.py --image test.jpeg --output out.png \\
-      --query "red box + arrow on the customer info card, label 'Customer Details'" \\
-      --query "rectangle around the payment timeline labeled 'Activity Log'"
+  python annotate.py --image test_1.jpeg --output out.png --query "red box + arrow on the customer info card, label 'Customer Details'"   --query "rectangle around the payment timeline labeled 'Activity Log'"
 
   python annotate.py --image test.jpeg --output out.png --queries-file queries.json
 """
