@@ -17,11 +17,12 @@ build/
 .eggs/
 
 # Test / scratch images
-test_*.jpeg
-test_*.jpg
-test_*.webp
-test_*.png
-*_annotated.png
+# test_*.jpeg
+# test_*.jpg
+# test_*.webp
+# test_*.png
+# *_annotated.png
+debug_*.png
 
 # IDE
 .vscode/

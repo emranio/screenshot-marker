@@ -18,10 +18,7 @@ from .drawing import render
 from .models import (
     Annotation,
     AnnotationResult,
-    Arrow,
     Bbox,
-    Label,
-    Point,
 )
 from .parser import parse_response
 from .vision import call_vision, encode_image, refine_bbox_call
@@ -30,10 +27,7 @@ __all__ = [
     "annotate",
     "Annotation",
     "AnnotationResult",
-    "Arrow",
     "Bbox",
-    "Label",
-    "Point",
 ]
 
 

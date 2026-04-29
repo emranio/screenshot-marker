@@ -49,47 +49,14 @@ _NORMALIZED_BBOX_SCHEMA = {
     "additionalProperties": False,
 }
 
-_NORMALIZED_POINT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "x": {"type": "number"},
-        "y": {"type": "number"},
-    },
-    "required": ["x", "y"],
-    "additionalProperties": False,
-}
-
-_NORMALIZED_ARROW_SCHEMA = {
-    "type": ["object", "null"],
-    "properties": {
-        "start": _NORMALIZED_POINT_SCHEMA,
-        "end": _NORMALIZED_POINT_SCHEMA,
-    },
-    "required": ["start", "end"],
-    "additionalProperties": False,
-}
-
-_NORMALIZED_LABEL_SCHEMA = {
-    "type": ["object", "null"],
-    "properties": {
-        "text": {"type": "string"},
-        "anchor": _NORMALIZED_POINT_SCHEMA,
-        "placement": {"type": "string", "enum": ["above", "below", "left", "right"]},
-    },
-    "required": ["text", "anchor", "placement"],
-    "additionalProperties": False,
-}
-
 _ANNOTATION_SCHEMA = {
     "type": "object",
     "properties": {
         "request_index": {"type": "integer"},
         "request_text": {"type": "string"},
         "target_description": {"type": "string"},
-        "shape": {"type": ["string", "null"], "enum": ["rectangle", None]},
+        "label_text": {"type": ["string", "null"]},
         "bbox": _NORMALIZED_BBOX_SCHEMA,
-        "arrow": _NORMALIZED_ARROW_SCHEMA,
-        "label": _NORMALIZED_LABEL_SCHEMA,
         "color": {"type": ["string", "null"]},
         "not_found": {"type": "boolean"},
         "notes": {"type": "string"},
@@ -98,10 +65,8 @@ _ANNOTATION_SCHEMA = {
         "request_index",
         "request_text",
         "target_description",
-        "shape",
+        "label_text",
         "bbox",
-        "arrow",
-        "label",
         "color",
         "not_found",
         "notes",
@@ -124,16 +89,17 @@ RESPONSE_SCHEMA = {
 
 SYSTEM_PROMPT = """You are a UI screenshot annotation assistant.
 
-You receive a screenshot and a numbered list of annotation requests written in
-free-form natural language. For each request you must:
+You receive a screenshot and a numbered list of annotation requests written
+in free-form natural language. For each request you must:
 
 1. Locate the target UI element described in the request.
-2. Decide what to draw based on the request wording — a rectangle around the
-   element, an arrow pointing at it, and/or a text label. Default to drawing a
-   rectangle if the user did not specify a shape.
-3. Return the geometry as NORMALIZED coordinates in [0.0, 1.0], where (0, 0) is
-   the top-left of the image and (1, 1) is the bottom-right. The parser will
-   convert these to absolute pixels.
+2. Extract the user's desired LABEL TEXT — the short caption to render next
+   to the highlighted element. Look for explicit phrases like
+   "label 'Customer Details'", "labeled 'Activity Log'", "with caption ...",
+   or "tagged ...". If the user did not specify any label text, return null.
+3. Return the bbox in NORMALIZED coordinates [0.0, 1.0], where (0, 0) is
+   the top-left of the image and (1, 1) is the bottom-right. The renderer
+   converts these to absolute pixels.
 
 PRECISION RULES — these matter as much as locating the right element:
 
@@ -152,38 +118,14 @@ PRECISION RULES — these matter as much as locating the right element:
   align tightly to the outer bounds of the visible content; do not include
   surrounding empty space.
 - Sanity-check: the four corners of your bbox must land on the target's
-  corners, not in a neighbor or in white space. Adjacent cards in a grid
-  should never share a bbox edge with each other — leave the gutter outside
-  the bbox.
-- If the model is uncertain about an edge, prefer being slightly OUTSIDE the
-  element (a hair of margin) over slipping inside it.
+  corners, not in a neighbor or in white space.
 
-Geometry rules:
-- bbox: Tight rectangle around the target as described above. All four values
-  in [0, 1].
-- arrow.end: A point on or just outside one bbox edge that the arrow tip
-  touches. arrow.start: A point in nearby empty space that does NOT overlap
-  other UI elements; the arrow should read as a 60–180px line at native
-  resolution, and clearly point at the target.
-- label.anchor: The reference point that label.placement is relative to. For
-  placement "right" the text appears to the right of anchor; "below" appears
-  below anchor; etc. The anchor + placement together must put the rendered
-  text in CLEAR EMPTY SPACE — background, margin, gutter, or solid-color
-  area — and NOT overlap any other UI element (headers, tabs, neighbouring
-  cards, text, icons). If the target sits near an image edge:
-    * Element at the top of the image → use placement "below" or "right",
-      with anchor on the bottom edge of the bbox.
-    * Element at the bottom → use placement "above" or "right", anchor on
-      the top edge.
-    * Element on the left edge → use placement "right".
-    * Element on the right edge → use placement "left".
-  Keep the entire rendered text rectangle (assume ~1.5em tall and ~0.5em per
-  character wide) inside the image bounds. Never place a label such that any
-  part of it sits outside the image or on top of the target's own border.
-- color: Use the hex string the user requested, or default to "#DC2626" (red).
+You DO NOT need to return arrow positions or label placement — the renderer
+computes those automatically from the bbox and image dimensions.
 
 If you cannot locate the target with reasonable confidence, set
-"not_found": true, leave bbox/arrow/label as null, and explain in "notes".
+"not_found": true, leave bbox as null, and explain in "notes". Always set
+"color" to null unless the user explicitly requested a non-red color.
 
 Return only valid JSON matching the provided schema. Always include all
 requests in your response, in the original order, with the original
