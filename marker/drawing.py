@@ -170,7 +170,7 @@ def _looks_like_tight_text_target(annotation: Annotation, stroke: int) -> bool:
     if bbox is None or bbox.height > max(44, stroke * 5):
         return False
 
-    description = (annotation.target_description or annotation.request_text).lower()
+    description = _target_text(annotation)
     control_words = (
         "input",
         "field",
@@ -197,6 +197,20 @@ def _looks_like_tight_text_target(annotation: Annotation, stroke: int) -> bool:
     return any(word in description for word in text_words)
 
 
+def _looks_like_tab_target(annotation: Annotation, stroke: int) -> bool:
+    bbox = annotation.bbox
+    if bbox is None or bbox.height > max(58, stroke * 7):
+        return False
+
+    words = _target_text(annotation).replace("-", " ").replace("_", " ").split()
+    tab_words = {"nav", "navigation", "tab", "tabs"}
+    return any(word in tab_words for word in words)
+
+
+def _target_text(annotation: Annotation) -> str:
+    return f"{annotation.target_description or ''} {annotation.request_text or ''}".lower()
+
+
 def _render_bbox(
     annotation: Annotation,
     image_size: tuple[int, int],
@@ -205,6 +219,18 @@ def _render_bbox(
     bbox = annotation.bbox
     if bbox is None:
         raise ValueError("annotation must have a bbox before rendering")
+
+    if _looks_like_tab_target(annotation, stroke):
+        side_pad = max(stroke * 5, round(bbox.width * 0.55))
+        top_pad = max(stroke // 2, round(bbox.height * 0.08))
+        bottom_pad = max(stroke * 2, round(bbox.height * 0.55))
+        return _clamp_bbox(
+            bbox.x - side_pad,
+            bbox.y - top_pad,
+            bbox.x + bbox.width + side_pad,
+            bbox.y + bbox.height + bottom_pad,
+            image_size,
+        )
 
     if not _looks_like_tight_text_target(annotation, stroke):
         return bbox
@@ -451,8 +477,8 @@ def _draw_arrow(
         tangent_len = desired_len
     ux, uy = tx / tangent_len, ty / tangent_len
 
-    head_len = max(arrow_stroke * 3.8, 18)
-    head_angle = math.radians(44)
+    head_len = max(arrow_stroke * 3.5, 17)
+    head_angle = math.radians(42)
     tangent_angle = math.atan2(uy, ux)
     wing_left = (
         end[0] + math.cos(tangent_angle + math.pi - head_angle) * head_len,
@@ -462,28 +488,10 @@ def _draw_arrow(
         end[0] + math.cos(tangent_angle + math.pi + head_angle) * head_len,
         end[1] + math.sin(tangent_angle + math.pi + head_angle) * head_len,
     )
-    shaft_inset = min(max(arrow_stroke * 2.8, head_len * 0.82), desired_len * 0.55)
-    shaft_end = (end[0] - ux * shaft_inset, end[1] - uy * shaft_inset)
-    shaft_points = [
-        point
-        for point in points
-        if math.hypot(end[0] - point[0], end[1] - point[1]) > shaft_inset
-    ]
-    if not shaft_points:
-        shaft_points = [start]
-    if (
-        math.hypot(
-            shaft_points[-1][0] - shaft_end[0],
-            shaft_points[-1][1] - shaft_end[1],
-        )
-        > 1
-    ):
-        shaft_points.append(shaft_end)
-
     color_rgba = color_rgb + (ARROW_ALPHA,)
     bounds = _shape_bounds(
         overlay,
-        shaft_points + [end, wing_left, wing_right],
+        points + [end, wing_left, wing_right],
         pad=arrow_stroke * 3,
     )
 
@@ -491,7 +499,7 @@ def _draw_arrow(
         def point(p: tuple[float, float]) -> tuple[float, float]:
             return ((p[0] - left) * scale, (p[1] - top) * scale)
 
-        scaled_points = [point(p) for p in shaft_points]
+        scaled_points = [point(p) for p in points]
         line_width = max(1, round(arrow_stroke * scale))
         draw.line(scaled_points, fill=color_rgba, width=line_width, joint="curve")
         tail_x, tail_y = scaled_points[0]
@@ -500,7 +508,7 @@ def _draw_arrow(
             [tail_x - radius, tail_y - radius, tail_x + radius, tail_y + radius],
             fill=color_rgba,
         )
-        head_width = max(1, round(arrow_stroke * 0.9 * scale))
+        head_width = max(1, round(arrow_stroke * 0.95 * scale))
         draw.line([point(wing_left), point(end)], fill=color_rgba, width=head_width)
         draw.line([point(wing_right), point(end)], fill=color_rgba, width=head_width)
 
