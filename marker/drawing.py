@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import math
-from functools import lru_cache
-from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
@@ -18,11 +16,6 @@ LABEL_TEXT_RGB = (255, 255, 255)
 MIN_FONT_SIZE = 14
 ANTIALIAS_SCALE = 3
 MAX_SUPERSAMPLED_PIXELS = 48_000_000
-SHAPES_DIR = Path(__file__).with_name("shapes")
-SHORT_CURVED_ARROW = "short-tail-curved-arrow.png"
-LONG_CURVED_ARROW = "long-tail-curved-arrow.png"
-SHORT_STRAIGHT_ARROW = "short-tail-straight-arrow.png"
-LONG_STRAIGHT_ARROW = "long-tail-straight-arrow.png"
 
 
 def _load_font(font_path: Optional[str], size: int) -> ImageFont.ImageFont:
@@ -373,157 +366,61 @@ def _draw_translucent_rectangle(
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
-def _draw_vector_arrow(
-    overlay: Image.Image,
+def _quadratic_point(
+    start: tuple[float, float],
+    control: tuple[float, float],
+    end: tuple[float, float],
+    t: float,
+) -> tuple[float, float]:
+    inv = 1.0 - t
+    return (
+        inv * inv * start[0] + 2 * inv * t * control[0] + t * t * end[0],
+        inv * inv * start[1] + 2 * inv * t * control[1] + t * t * end[1],
+    )
+
+
+def _curved_arrow_points(
     start: tuple[float, float],
     end: tuple[float, float],
-    color_rgb: tuple[int, int, int],
-    stroke: int,
-) -> None:
+    *,
+    bend: float,
+) -> list[tuple[float, float]]:
     sx, sy = start
     ex, ey = end
     dx = ex - sx
     dy = ey - sy
     length = math.hypot(dx, dy)
     if length < 1:
-        return
+        return [start, end]
 
-    head_len = max(stroke * 4, 12)
-    head_half_width = max(stroke * 2.4, 8)
     ux, uy = dx / length, dy / length
     perp_x, perp_y = -uy, ux
-    base_x = ex - ux * head_len
-    base_y = ey - uy * head_len
-    line_end_x = ex - ux * (head_len * 0.7)
-    line_end_y = ey - uy * (head_len * 0.7)
-
-    color_rgba = color_rgb + (ARROW_ALPHA,)
-    tip = (ex, ey)
-    head_left = (base_x + perp_x * head_half_width, base_y + perp_y * head_half_width)
-    head_right = (base_x - perp_x * head_half_width, base_y - perp_y * head_half_width)
-    bounds = _shape_bounds(
-        overlay,
-        [(sx, sy), (line_end_x, line_end_y), tip, head_left, head_right],
-        pad=stroke * 2,
+    control = (
+        (sx + ex) / 2 + perp_x * bend,
+        (sy + ey) / 2 + perp_y * bend,
     )
-
-    def draw_shape(draw: ImageDraw.ImageDraw, scale: int, left: int, top: int) -> None:
-        def point(p: tuple[float, float]) -> tuple[float, float]:
-            return ((p[0] - left) * scale, (p[1] - top) * scale)
-
-        draw.line(
-            [point((sx, sy)), point((line_end_x, line_end_y))],
-            fill=color_rgba,
-            width=max(1, stroke * scale),
-        )
-        draw.polygon(
-            [point(tip), point(head_left), point(head_right)],
-            fill=color_rgba,
-        )
-
-    _paste_antialiased_shape(overlay, bounds, draw_shape)
+    steps = max(18, min(80, round(length / 5)))
+    return [_quadratic_point(start, control, end, i / steps) for i in range(steps + 1)]
 
 
-@lru_cache(maxsize=8)
-def _load_arrow_asset(name: str) -> tuple[Image.Image, tuple[float, float], tuple[float, float]]:
-    path = SHAPES_DIR / name
-    image = Image.open(path).convert("RGBA")
-    alpha = image.getchannel("A")
-    pixels = alpha.load()
+def _arrow_bend(start: tuple[float, float], end: tuple[float, float], style: str) -> float:
+    if style == "straight":
+        return 0.0
 
-    solid: list[tuple[int, int, int]] = []
-    visible: list[tuple[int, int, int]] = []
-    for y in range(image.height):
-        for x in range(image.width):
-            a = pixels[x, y]
-            if a > 24:
-                visible.append((x, y, a))
-                if a > 128:
-                    solid.append((x, y, a))
-    points = solid or visible
-    if not points:
-        raise ValueError(f"Arrow asset has no visible pixels: {path}")
+    sx, sy = start
+    ex, ey = end
+    dx = ex - sx
+    dy = ey - sy
+    length = math.hypot(dx, dy)
+    if length < 1:
+        return 0.0
 
-    min_x = min(x for x, _, _ in points)
-    max_x = max(x for x, _, _ in points)
-    band_w = max(4, round(image.width * 0.015))
-    head_band = [(x, y, a) for x, y, a in points if x <= min_x + band_w]
-    tail_band = [(x, y, a) for x, y, a in points if x >= max_x - band_w]
-
-    def weighted_center_y(band: list[tuple[int, int, int]]) -> float:
-        total_alpha = sum(a for _, _, a in band)
-        if total_alpha <= 0:
-            return sum(y for _, y, _ in band) / len(band)
-        return sum(y * a for _, y, a in band) / total_alpha
-
-    # Asset convention: arrowhead is on the left, tail is on the right.
-    # Anchor to edge centers so the visible tail stays at the label.
-    head = (float(min_x), weighted_center_y(head_band))
-    tail = (float(max_x), weighted_center_y(tail_band))
-    return image, head, tail
-
-
-def _tinted_arrow_asset(asset: Image.Image, color_rgb: tuple[int, int, int]) -> Image.Image:
-    alpha = asset.getchannel("A")
-    if ARROW_ALPHA < 255:
-        alpha = alpha.point(lambda a: round(a * ARROW_ALPHA / 255))
-    tinted = Image.new("RGBA", asset.size, color_rgb + (255,))
-    tinted.putalpha(alpha)
-    return tinted
-
-
-def _rotate_point(
-    point: tuple[float, float],
-    center: tuple[float, float],
-    angle_rad: float,
-) -> tuple[float, float]:
-    px, py = point
-    cx, cy = center
-    dx = px - cx
-    dy = py - cy
-    cos_a = math.cos(angle_rad)
-    sin_a = math.sin(angle_rad)
-    return (
-        cx + dx * cos_a - dy * sin_a,
-        cy + dx * sin_a + dy * cos_a,
-    )
-
-
-def _rotated_anchor_position(
-    size: tuple[int, int],
-    anchor: tuple[float, float],
-    angle_deg: float,
-) -> tuple[float, float]:
-    width, height = size
-    center = (width / 2, height / 2)
-    angle_rad = math.radians(angle_deg)
-    corners = [
-        _rotate_point((0, 0), center, angle_rad),
-        _rotate_point((width, 0), center, angle_rad),
-        _rotate_point((width, height), center, angle_rad),
-        _rotate_point((0, height), center, angle_rad),
-    ]
-    min_x = min(x for x, _ in corners)
-    min_y = min(y for _, y in corners)
-    ax, ay = _rotate_point(anchor, center, angle_rad)
-    return ax - min_x, ay - min_y
-
-
-def _alpha_composite_clipped(
-    target: Image.Image,
-    source: Image.Image,
-    xy: tuple[int, int],
-) -> None:
-    x, y = xy
-    left = max(0, x)
-    top = max(0, y)
-    right = min(target.width, x + source.width)
-    bottom = min(target.height, y + source.height)
-    if right <= left or bottom <= top:
-        return
-
-    crop = source.crop((left - x, top - y, right - x, bottom - y))
-    target.alpha_composite(crop, (left, top))
+    amount = min(max(length * 0.28, 12), 70)
+    if abs(dx) < abs(dy) * 0.45:
+        return amount if dy < 0 else -amount
+    if abs(dy) < abs(dx) * 0.45:
+        return -amount if dx > 0 else amount
+    return amount if dx * dy < 0 else -amount
 
 
 def _draw_arrow(
@@ -542,46 +439,54 @@ def _draw_arrow(
     if desired_len < 1:
         return
 
-    asset_name = _select_arrow_asset(style, desired_len, stroke)
-    try:
-        asset, head, tail = _load_arrow_asset(asset_name)
-    except (OSError, ValueError):
-        _draw_vector_arrow(overlay, start, end, color_rgb, stroke)
-        return
+    arrow_stroke = max(3, round(stroke * 0.62))
+    bend = _arrow_bend(start, end, style)
+    points = _curved_arrow_points(start, end, bend=bend)
+    tangent_start = points[-2]
+    tx = end[0] - tangent_start[0]
+    ty = end[1] - tangent_start[1]
+    tangent_len = math.hypot(tx, ty)
+    if tangent_len < 1:
+        tx, ty = dx, dy
+        tangent_len = desired_len
+    ux, uy = tx / tangent_len, ty / tangent_len
 
-    base_dx = head[0] - tail[0]
-    base_dy = head[1] - tail[1]
-    base_len = math.hypot(base_dx, base_dy)
-    if base_len < 1:
-        _draw_vector_arrow(overlay, start, end, color_rgb, stroke)
-        return
-
-    scale = max(0.035, desired_len / base_len)
-    scaled_w = max(8, round(asset.width * scale))
-    scaled_h = max(8, round(asset.height * scale))
-    resized = _tinted_arrow_asset(asset, color_rgb).resize(
-        (scaled_w, scaled_h),
-        Image.Resampling.LANCZOS,
+    head_len = max(arrow_stroke * 2.8, 12)
+    head_angle = math.radians(34)
+    tangent_angle = math.atan2(uy, ux)
+    wing_left = (
+        end[0] + math.cos(tangent_angle + math.pi - head_angle) * head_len,
+        end[1] + math.sin(tangent_angle + math.pi - head_angle) * head_len,
     )
-    scaled_head = (head[0] * scale, head[1] * scale)
-    scaled_tail = (tail[0] * scale, tail[1] * scale)
+    wing_right = (
+        end[0] + math.cos(tangent_angle + math.pi + head_angle) * head_len,
+        end[1] + math.sin(tangent_angle + math.pi + head_angle) * head_len,
+    )
 
-    base_angle = math.degrees(math.atan2(scaled_head[1] - scaled_tail[1], scaled_head[0] - scaled_tail[0]))
-    desired_angle = math.degrees(math.atan2(dy, dx))
-    angle = desired_angle - base_angle
+    color_rgba = color_rgb + (ARROW_ALPHA,)
+    bounds = _shape_bounds(
+        overlay,
+        points + [end, wing_left, wing_right],
+        pad=arrow_stroke * 3,
+    )
 
-    rotated = resized.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
-    tail_after_rotate = _rotated_anchor_position(resized.size, scaled_tail, angle)
-    paste_x = round(sx - tail_after_rotate[0])
-    paste_y = round(sy - tail_after_rotate[1])
-    _alpha_composite_clipped(overlay, rotated, (paste_x, paste_y))
+    def draw_shape(draw: ImageDraw.ImageDraw, scale: int, left: int, top: int) -> None:
+        def point(p: tuple[float, float]) -> tuple[float, float]:
+            return ((p[0] - left) * scale, (p[1] - top) * scale)
 
+        scaled_points = [point(p) for p in points]
+        line_width = max(1, round(arrow_stroke * scale))
+        draw.line(scaled_points, fill=color_rgba, width=line_width, joint="curve")
+        tail_x, tail_y = scaled_points[0]
+        radius = line_width / 2
+        draw.ellipse(
+            [tail_x - radius, tail_y - radius, tail_x + radius, tail_y + radius],
+            fill=color_rgba,
+        )
+        draw.line([point(wing_left), point(end)], fill=color_rgba, width=line_width)
+        draw.line([point(wing_right), point(end)], fill=color_rgba, width=line_width)
 
-def _select_arrow_asset(style: str, length: float, stroke: int) -> str:
-    is_long = length >= 120
-    if style == "straight":
-        return LONG_STRAIGHT_ARROW if is_long else SHORT_STRAIGHT_ARROW
-    return LONG_CURVED_ARROW if is_long else SHORT_CURVED_ARROW
+    _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
 def _arrow_endpoints(
