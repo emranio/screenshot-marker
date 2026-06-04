@@ -1,22 +1,23 @@
 # screenshot-marker
 
 A small Python tool that takes a UI screenshot plus one or more **plain-English
-annotation requests** and produces an annotated image — red rectangles, arrows,
-and labelled callouts — using a vision LLM (default: GPT‑5.4) for spatial
-reasoning and Pillow for the drawing.
+annotation requests** and produces an annotated image: translucent red
+outlines, opaque arrows, and labelled callouts. A vision LLM (default:
+GPT‑5.4) handles spatial reasoning; Pillow handles the final rendering.
 
 ```text
-test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
-            + "rectangle around the Annotations tab labeled 'Active tab'"
-                                ↓
-                test_2_annotated.png  (rounded translucent rectangles,
-                                       arrows, blurred-pill labels)
+tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
+                         + "rectangle around the Annotations tab labeled 'Active tab'"
+                                             ↓
+                tests/rendered/test_2.png  (smooth translucent outlines,
+                                           opaque arrows, capsule labels)
 ```
 
 - One LLM round‑trip per call regardless of how many queries you pass.
 - Free‑form natural‑language queries — the model both parses intent and
   locates the region.
-- Modular: vision call, JSON parsing, drawing, and CLI are separate units.
+- Modular: vision call, JSON parsing, drawing, fixture runner, and CLI are
+  separate units.
 - No HTTP server, no web UI — just a Python module and a thin CLI.
 - Always returns structured JSON (Python API and CLI both).
 - Safety: when the model can't confidently locate a target, the request is
@@ -54,26 +55,28 @@ small UI elements; mini models are cheaper and faster.
 
 ```bash
 .venv/bin/python annotate.py \
-  --image test_1.jpeg \
+  --image tests/screens/test_1.jpeg \
+  --output tests/rendered/test_1.png \
   --query "red box on the customer info section, label 'Customer Details'" \
   --query "rectangle around the payment timeline labeled 'Activity Log'"
 ```
 
-Output: writes `test_1_annotated.png` next to the input by default, prints
+Output: writes the annotated PNG to the requested path, prints
 the full JSON result to **stdout**, and a one‑line human summary to
 **stderr**.
 
 ```text
-$ python annotate.py --image test_2.webp \
+$ python annotate.py --image tests/screens/test_2.webp \
+    --output tests/rendered/test_2.png \
     --query "rectangle around the Annotations tab labeled 'Active tab'" \
   > result.json
-Wrote test_2_annotated.png  (1/1 resolved, 0 unresolved)
+Wrote tests/rendered/test_2.png  (1/1 resolved, 0 unresolved)
 $ jq '.annotations[0].bbox' result.json
 {
-  "x": 229,
-  "y": 96,
-  "width": 83,
-  "height": 51
+  "x": 258,
+  "y": 99,
+  "width": 92,
+  "height": 42
 }
 ```
 
@@ -84,7 +87,7 @@ $ jq '.annotations[0].bbox' result.json
 | `--image PATH` | (required) | Input image. JPEG, PNG, or WebP. |
 | `--output PATH` | `<image_dir>/<stem>_annotated.png` | Where to write the annotated PNG. Optional. |
 | `--query "..."` | — | A natural‑language annotation request. Repeatable. |
-| `--queries-file PATH` | — | A JSON file containing a list of query strings. Combine with `--query` if you want. |
+| `--queries-file PATH` | — | A JSON array of query strings, or a saved annotation result JSON from `tests/annotations`. Combine with `--query` if you want. |
 | `--model NAME` | `$OPENAI_MODEL` or `gpt-5.4` | Override the vision model for this run. |
 | `--color HEX` | `#DC2626` | Default annotation color. |
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
@@ -100,12 +103,12 @@ $ jq '.annotations[0].bbox' result.json
 from marker import annotate
 
 result = annotate(
-    image_path="test_1.jpeg",
+    image_path="tests/screens/test_1.jpeg",
+    output_path="tests/rendered/test_1.png",
     queries=[
         "red box on the customer info section, label 'Customer Details'",
         "rectangle around the payment timeline labeled 'Activity Log'",
     ],
-    # output_path defaults to <image_dir>/<stem>_annotated.png
     # all kwargs below are optional:
     model="gpt-5.4",
     color="#DC2626",
@@ -127,7 +130,7 @@ The Python API and the CLI both yield the same JSON structure:
 
 ```jsonc
 {
-  "output_path": "test_1_annotated.png",
+  "output_path": "tests/rendered/test_1.png",
   "annotations": [
     {
       "request_index": 0,
@@ -156,6 +159,26 @@ The Python API and the CLI both yield the same JSON structure:
 
 `bbox` is in absolute pixel coordinates of the input image. `null` means the
 request was not resolved.
+
+### Test fixtures
+
+```text
+tests/
+├── screens/       # source screenshots
+├── annotations/   # annotation JSON only
+└── rendered/      # annotated output images
+```
+
+Run the local fixture set with:
+
+```bash
+./run_tests.sh --allow-unresolved
+```
+
+The runner loops over `tests/screens/*`, reads request text from the matching
+`tests/annotations/<stem>.json`, writes updated images to `tests/rendered/`,
+and replaces each annotation JSON with the fresh CLI result after a successful
+run. Screens without a matching annotation JSON are skipped.
 
 ---
 
@@ -208,11 +231,11 @@ Tips:
    │  map back to image coords                                    │
    └──────────┬───────────────────────────────────────────────────┘
               ▼
-   ┌──── render (Pillow) ────┐
-   │  rounded translucent rect│
-   │  blurred colored label   │
-   │  auto‑placed arrow       │
-   └──────────┬───────────────┘
+   ┌──── render (Pillow) ─────┐
+   │  antialiased outline     │
+   │  blurred capsule label   │
+   │  opaque auto‑placed arrow│
+   └──────────┬────────────────┘
               ▼
         annotated PNG
 ```
@@ -228,8 +251,11 @@ Tips:
 - **Auto‑arrow & label placement** — you don't tell the model where the
   caption should go. The renderer picks bottom‑left under the bbox by
   default and falls back to top‑left, bottom‑right, or top‑right when
-  there isn't room. The arrow is drawn from the label to the nearest
+  there isn't room. The arrow is drawn from the capsule edge to the nearest
   bbox edge.
+- **Text bbox breathing room** — very tight text/link/heading boxes get a
+  small render-time expansion so outlines don't cut through glyphs or sit too
+  low on the line.
 
 ---
 
@@ -238,13 +264,18 @@ Tips:
 ```text
 screenshot-marker/
 ├── annotate.py             # CLI entry point
+├── run_tests.sh            # Local fixture runner
 ├── marker/
 │   ├── __init__.py         # Public API: annotate()
 │   ├── vision.py           # OpenAI call, prompt, schema
 │   ├── parser.py           # JSON → typed annotations + sanity check
-│   ├── drawing.py          # Pillow rendering: rect, arrow, label, bg
+│   ├── drawing.py          # Pillow rendering: outline, arrow, label, bg
 │   ├── models.py           # Pydantic schemas
 │   └── config.py           # Defaults + env loading
+├── tests/
+│   ├── screens/            # Source screenshots
+│   ├── annotations/        # Annotation result JSON sidecars
+│   └── rendered/           # Rendered annotated PNG outputs
 ├── requirements.txt
 └── .env.example
 ```
@@ -259,10 +290,13 @@ screenshot-marker/
   feeding in if you need pixel‑perfect alignment.
 - **Mini models** (e.g. `gpt-5.4-mini`) work but are noticeably less
   precise. They're good for batch jobs where coarse highlighting is fine.
-- **Stroke width** is auto‑scaled with image size. Override with `--stroke`
-  if you want it heavier or lighter.
-- **The label text uses white on a translucent colored pill**. Change the
-  pill / arrow color via `--color` (or `color=` in Python).
+- **Stroke width** is auto‑scaled with image size. Rectangle outlines render
+  thinner than arrows/labels (`max(2.5, round(stroke × 0.45))`) so the box
+  stays readable without overpowering the screenshot.
+- **Rectangle outlines are intentionally translucent.** Arrows are opaque so
+  the pointer remains crisp.
+- **The label text uses white on a translucent colored capsule**. Change the
+  capsule / arrow / outline color via `--color` (or `color=` in Python).
 
 ---
 

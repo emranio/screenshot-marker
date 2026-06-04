@@ -16,12 +16,7 @@ dist/
 build/
 .eggs/
 
-# Test / scratch images
-# test_*.jpeg
-# test_*.jpg
-# test_*.webp
-# test_*.png
-# *_annotated.png
+# Scratch images. Test fixtures are tracked under tests/.
 debug_*.png
 
 # IDE

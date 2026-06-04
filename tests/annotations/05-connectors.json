@@ -1,0 +1,51 @@
+{
+  "output_path": "tests/rendered/05-connectors.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "rectangle around the gray subtitle text that begins 'All of your API keys and credentials are stored here', label 'One home for all AI keys'",
+      "target_description": "Gray subtitle text below the Connectors page title",
+      "label_text": "One home for all AI keys",
+      "bbox": {
+        "x": 151,
+        "y": 86,
+        "width": 727,
+        "height": 16
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "red box with an arrow on the blue 'Install the AI plugin' button inside the pink banner near the top, label 'Install the AI plugin'",
+      "target_description": "Blue Install the AI plugin button inside the pink banner near the top center",
+      "label_text": "Install the AI plugin",
+      "bbox": {
+        "x": 504,
+        "y": 225,
+        "width": 143,
+        "height": 37
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 2,
+      "request_text": "draw a rectangle around the group of three provider rows titled 'Anthropic', 'Google', and 'OpenAI', each with an 'Install' button on the right, label 'Connect a provider'",
+      "target_description": "The three stacked provider rows for Anthropic, Google, and OpenAI including their borders and Install buttons",
+      "label_text": "Connect a provider",
+      "bbox": {
+        "x": 479,
+        "y": 296,
+        "width": 632,
+        "height": 270
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    }
+  ],
+  "unresolved": []
+}

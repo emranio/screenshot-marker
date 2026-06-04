@@ -1,0 +1,36 @@
+{
+  "output_path": "tests/rendered/01-dashboard.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "rectangle with an arrow pointing to the underlined link 'Learn more about the 7.0 version' under the big 'Welcome to WordPress!' heading, label 'Step 1: Confirm WordPress 7.0'",
+      "target_description": "underlined 'Learn more about the 7.0 version' link beneath the Welcome to WordPress heading in the top welcome panel",
+      "label_text": "Step 1: Confirm WordPress 7.0",
+      "bbox": {
+        "x": 229,
+        "y": 227,
+        "width": 329,
+        "height": 29
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "rectangle around the line 'WordPress 7.0 running Twenty Twenty-Five theme' inside the 'At a Glance' box, label 'Version confirmed'",
+      "target_description": "status line 'WordPress 7.0 running Twenty Twenty-Five theme.' near the bottom of the At a Glance box",
+      "label_text": "Version confirmed",
+      "bbox": {
+        "x": 168,
+        "y": 845,
+        "width": 343,
+        "height": 31
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    }
+  ],
+  "unresolved": []
+}

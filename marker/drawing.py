@@ -7,13 +7,15 @@ from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 from .models import Annotation, Bbox
 
-STROKE_ALPHA = 200
-ARROW_ALPHA = 215
+STROKE_ALPHA = 145
+ARROW_ALPHA = 255
 LABEL_BG_ALPHA = 215
 LABEL_TEXT_ALPHA = 255
 LABEL_TEXT_RGB = (255, 255, 255)
 
 MIN_FONT_SIZE = 14
+ANTIALIAS_SCALE = 3
+MAX_SUPERSAMPLED_PIXELS = 48_000_000
 
 
 def _load_font(font_path: Optional[str], size: int) -> ImageFont.ImageFont:
@@ -93,6 +95,132 @@ def _wrap_text(
     return lines, total_w, total_h
 
 
+def _supersample_scale(width: int, height: int, preferred: int = ANTIALIAS_SCALE) -> int:
+    if width <= 0 or height <= 0:
+        return 1
+    for scale in range(preferred, 1, -1):
+        if width * height * scale * scale <= MAX_SUPERSAMPLED_PIXELS:
+            return scale
+    return 1
+
+
+def _paste_antialiased_shape(
+    target: Image.Image,
+    bounds: tuple[int, int, int, int],
+    draw_shape,
+    *,
+    preferred_scale: int = ANTIALIAS_SCALE,
+) -> None:
+    left, top, right, bottom = bounds
+    if right <= left or bottom <= top:
+        return
+
+    width = right - left
+    height = bottom - top
+    scale = _supersample_scale(width, height, preferred_scale)
+    patch = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+    draw_shape(ImageDraw.Draw(patch), scale, left, top)
+
+    if scale > 1:
+        patch = patch.resize((width, height), Image.Resampling.LANCZOS)
+    target.alpha_composite(patch, (left, top))
+
+
+def _shape_bounds(
+    target: Image.Image,
+    points: list[tuple[float, float]],
+    pad: float,
+) -> tuple[int, int, int, int]:
+    min_x = min(x for x, _ in points)
+    min_y = min(y for _, y in points)
+    max_x = max(x for x, _ in points)
+    max_y = max(y for _, y in points)
+    left = max(0, int(math.floor(min_x - pad)))
+    top = max(0, int(math.floor(min_y - pad)))
+    right = min(target.width, int(math.ceil(max_x + pad)) + 1)
+    bottom = min(target.height, int(math.ceil(max_y + pad)) + 1)
+    return left, top, right, bottom
+
+
+def _rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
+    width, height = size
+    scale = _supersample_scale(width, height)
+    mask = Image.new("L", (width * scale, height * scale), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [(0, 0), (width * scale - 1, height * scale - 1)],
+        radius=radius * scale,
+        fill=255,
+    )
+    if scale > 1:
+        mask = mask.resize(size, Image.Resampling.LANCZOS)
+    return mask
+
+
+def _clamp_bbox(x0: int, y0: int, x1: int, y1: int, image_size: tuple[int, int]) -> Bbox:
+    img_w, img_h = image_size
+    x0 = max(0, min(x0, img_w - 1))
+    y0 = max(0, min(y0, img_h - 1))
+    x1 = max(x0 + 1, min(x1, img_w))
+    y1 = max(y0 + 1, min(y1, img_h))
+    return Bbox(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
+
+
+def _looks_like_tight_text_target(annotation: Annotation, stroke: int) -> bool:
+    bbox = annotation.bbox
+    if bbox is None or bbox.height > max(44, stroke * 5):
+        return False
+
+    description = (annotation.target_description or annotation.request_text).lower()
+    control_words = (
+        "input",
+        "field",
+        "card",
+        "row",
+        "panel",
+        "popup",
+        "banner",
+        "bar",
+    )
+    if any(word in description for word in control_words):
+        return False
+
+    text_words = (
+        "text",
+        "link",
+        "line",
+        "heading",
+        "subtitle",
+        "placeholder",
+        "title",
+        "shortcut",
+    )
+    return any(word in description for word in text_words)
+
+
+def _render_bbox(
+    annotation: Annotation,
+    image_size: tuple[int, int],
+    stroke: int,
+) -> Bbox:
+    bbox = annotation.bbox
+    if bbox is None:
+        raise ValueError("annotation must have a bbox before rendering")
+
+    if not _looks_like_tight_text_target(annotation, stroke):
+        return bbox
+
+    side_pad = max(stroke // 2, round(bbox.height * 0.18))
+    top_pad = max(stroke, round(bbox.height * 0.35))
+    bottom_pad = max(stroke // 2, round(bbox.height * 0.2))
+    return _clamp_bbox(
+        bbox.x - side_pad,
+        bbox.y - top_pad,
+        bbox.x + bbox.width + side_pad,
+        bbox.y + bbox.height + bottom_pad,
+        image_size,
+    )
+
+
 def _fit_label(
     bbox: Bbox,
     text: str,
@@ -101,6 +229,8 @@ def _fit_label(
     font_path: Optional[str],
     gap: int,
     margin: int,
+    pad_x: int,
+    pad_y: int,
     draw: ImageDraw.ImageDraw,
 ) -> dict:
     """Pick the best label layout: vertical side, horizontal alignment, font size, wrapping.
@@ -110,13 +240,14 @@ def _fit_label(
       horizontal: left-aligned to bbox, else right-aligned
       font:       100% → 85% → 70% → 55% of base
       lines:      1 → 2 → 3
-    Returns a dict with font, lines, text_w, text_h, lx, ly, vertical, horizontal.
+    Returns a dict with font, lines, text_w, text_h, lx, ly, bg_rect, vertical, horizontal.
     """
     img_w, img_h = image_size
     space_below = img_h - bbox.y - bbox.height - gap - margin
     space_above = bbox.y - gap - margin
 
-    if space_below >= 30:
+    min_bg_h = MIN_FONT_SIZE + pad_y * 2
+    if space_below >= min_bg_h:
         vertical_options = ["below", "above"]
     else:
         vertical_options = ["above", "below"]
@@ -126,36 +257,42 @@ def _fit_label(
     line_options = (1, 2, 3)
 
     for vertical in vertical_options:
-        max_h = space_below if vertical == "below" else space_above
-        if max_h < 20:
+        max_bg_h = space_below if vertical == "below" else space_above
+        max_text_h = max_bg_h - pad_y * 2
+        if max_text_h < MIN_FONT_SIZE:
             continue
         for horizontal in horizontal_options:
             if horizontal == "left":
-                max_w = img_w - bbox.x - margin
+                max_bg_w = img_w - bbox.x - margin
             else:
-                max_w = bbox.x + bbox.width - margin
-            if max_w < 60:
+                max_bg_w = bbox.x + bbox.width - margin
+            max_text_w = max_bg_w - pad_x * 2
+            if max_text_w < 60:
                 continue
             for scale in scales:
                 font_size = max(MIN_FONT_SIZE, int(base_font_size * scale))
                 font = _load_font(font_path, font_size)
                 for max_lines in line_options:
-                    fit = _wrap_text(text, font, max_w, max_lines, draw)
+                    fit = _wrap_text(text, font, max_text_w, max_lines, draw)
                     if fit is None:
                         continue
                     lines, w, h = fit
-                    if not lines or h > max_h:
+                    if not lines or h > max_text_h:
                         continue
+                    bg_w = w + pad_x * 2
+                    bg_h = h + pad_y * 2
                     if vertical == "below":
-                        ly = bbox.y + bbox.height + gap
+                        bg_y0 = bbox.y + bbox.height + gap
                     else:
-                        ly = bbox.y - h - gap
+                        bg_y0 = bbox.y - bg_h - gap
                     if horizontal == "left":
-                        lx = bbox.x
+                        bg_x0 = bbox.x
                     else:
-                        lx = bbox.x + bbox.width - w
-                    lx = max(margin, min(lx, img_w - w - margin))
-                    ly = max(margin, min(ly, img_h - h - margin))
+                        bg_x0 = bbox.x + bbox.width - bg_w
+                    bg_x0 = max(margin, min(bg_x0, img_w - bg_w - margin))
+                    bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
+                    lx = bg_x0 + pad_x
+                    ly = bg_y0 + pad_y
                     return {
                         "font": font,
                         "lines": lines,
@@ -163,23 +300,30 @@ def _fit_label(
                         "text_h": h,
                         "lx": lx,
                         "ly": ly,
+                        "bg_rect": (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h),
                         "vertical": vertical,
                         "horizontal": horizontal,
                     }
 
     # Final fallback: smallest font, force-fit single block, BL preferred.
     font = _load_font(font_path, MIN_FONT_SIZE)
-    fit = _wrap_text(text, font, img_w - 2 * margin, 4, draw)
+    max_bg_w = max(1, img_w - 2 * margin)
+    max_text_w = max(1, max_bg_w - 2 * pad_x)
+    fit = _wrap_text(text, font, max_text_w, 4, draw)
     if fit is None or not fit[0]:
         # Truncate and retry on a single line
         ellipsized = text[: max(8, len(text) // 2)] + "…"
-        fit = _wrap_text(ellipsized, font, img_w - 2 * margin, 1, draw) or ([ellipsized], img_w - 2 * margin, _line_height(font))
+        fit = _wrap_text(ellipsized, font, max_text_w, 1, draw) or ([ellipsized], max_text_w, _line_height(font))
     lines, w, h = fit
-    lx = max(margin, min(bbox.x, img_w - w - margin))
-    if bbox.y + bbox.height + gap + h <= img_h - margin:
-        ly = bbox.y + bbox.height + gap
+    bg_w = min(max_bg_w, w + 2 * pad_x)
+    bg_h = h + 2 * pad_y
+    bg_x0 = max(margin, min(bbox.x, img_w - bg_w - margin))
+    if bbox.y + bbox.height + gap + bg_h <= img_h - margin:
+        bg_y0 = bbox.y + bbox.height + gap
     else:
-        ly = max(margin, bbox.y - h - gap)
+        bg_y0 = max(margin, bbox.y - bg_h - gap)
+    lx = bg_x0 + pad_x
+    ly = bg_y0 + pad_y
     return {
         "font": font,
         "lines": lines,
@@ -187,6 +331,7 @@ def _fit_label(
         "text_h": h,
         "lx": lx,
         "ly": ly,
+        "bg_rect": (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h),
         "vertical": "below",
         "horizontal": "left",
     }
@@ -196,18 +341,29 @@ def _draw_translucent_rectangle(
     overlay: Image.Image,
     bbox: Bbox,
     color_rgb: tuple[int, int, int],
-    stroke: int,
+    stroke: float,
 ) -> None:
-    draw = ImageDraw.Draw(overlay)
     x0, y0 = bbox.x, bbox.y
     x1, y1 = bbox.x + bbox.width, bbox.y + bbox.height
-    radius = max(4, stroke)
-    draw.rounded_rectangle(
+    radius = int(min(max(stroke * 2.2, 10), max(4, min(bbox.width, bbox.height) / 3)))
+    bounds = _shape_bounds(
+        overlay,
         [(x0, y0), (x1, y1)],
-        radius=radius,
-        outline=color_rgb + (STROKE_ALPHA,),
-        width=stroke,
+        pad=max(stroke * 2, radius * 0.12),
     )
+
+    def draw_shape(draw: ImageDraw.ImageDraw, scale: int, left: int, top: int) -> None:
+        draw.rounded_rectangle(
+            [
+                ((x0 - left) * scale, (y0 - top) * scale),
+                ((x1 - left) * scale, (y1 - top) * scale),
+            ],
+            radius=radius * scale,
+            outline=color_rgb + (STROKE_ALPHA,),
+            width=max(1, round(stroke * scale)),
+        )
+
+    _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
 def _draw_arrow(
@@ -235,16 +391,30 @@ def _draw_arrow(
     line_end_y = ey - uy * (head_len * 0.7)
 
     color_rgba = color_rgb + (ARROW_ALPHA,)
-    draw = ImageDraw.Draw(overlay)
-    draw.line(
-        [(sx, sy), (line_end_x, line_end_y)],
-        fill=color_rgba,
-        width=stroke,
-    )
     tip = (ex, ey)
-    left = (base_x + perp_x * head_half_width, base_y + perp_y * head_half_width)
-    right = (base_x - perp_x * head_half_width, base_y - perp_y * head_half_width)
-    draw.polygon([tip, left, right], fill=color_rgba)
+    head_left = (base_x + perp_x * head_half_width, base_y + perp_y * head_half_width)
+    head_right = (base_x - perp_x * head_half_width, base_y - perp_y * head_half_width)
+    bounds = _shape_bounds(
+        overlay,
+        [(sx, sy), (line_end_x, line_end_y), tip, head_left, head_right],
+        pad=stroke * 2,
+    )
+
+    def draw_shape(draw: ImageDraw.ImageDraw, scale: int, left: int, top: int) -> None:
+        def point(p: tuple[float, float]) -> tuple[float, float]:
+            return ((p[0] - left) * scale, (p[1] - top) * scale)
+
+        draw.line(
+            [point((sx, sy)), point((line_end_x, line_end_y))],
+            fill=color_rgba,
+            width=max(1, stroke * scale),
+        )
+        draw.polygon(
+            [point(tip), point(head_left), point(head_right)],
+            fill=color_rgba,
+        )
+
+    _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
 def _arrow_endpoints(
@@ -283,43 +453,33 @@ def _render_label_with_blur_bg(
     canvas: Image.Image,
     layout: dict,
     color_rgb: tuple[int, int, int],
-    pad_x: int,
-    pad_y: int,
     blur_radius: int,
 ) -> None:
     """Blur the canvas region under the label, mask with rounded corners, draw text on top."""
     lines: list[str] = layout["lines"]
     font: ImageFont.ImageFont = layout["font"]
     lx, ly = layout["lx"], layout["ly"]
-    text_w, text_h = layout["text_w"], layout["text_h"]
+    bg_x0, bg_y0, bg_x1, bg_y1 = layout["bg_rect"]
 
-    bg_x0 = max(0, lx - pad_x)
-    bg_y0 = max(0, ly - pad_y)
-    bg_x1 = min(canvas.width, lx + text_w + pad_x)
-    bg_y1 = min(canvas.height, ly + text_h + pad_y)
+    bg_x0 = max(0, int(round(bg_x0)))
+    bg_y0 = max(0, int(round(bg_y0)))
+    bg_x1 = min(canvas.width, int(round(bg_x1)))
+    bg_y1 = min(canvas.height, int(round(bg_y1)))
     if bg_x1 <= bg_x0 or bg_y1 <= bg_y0:
         return
 
     bg_w = bg_x1 - bg_x0
     bg_h = bg_y1 - bg_y0
-    radius = max(4, min(pad_x, pad_y))
+    radius = max(8, min(bg_w, bg_h) // 2)
 
     crop = canvas.crop((bg_x0, bg_y0, bg_x1, bg_y1))
     blurred = crop.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
-    mask = Image.new("L", (bg_w, bg_h), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        [(0, 0), (bg_w - 1, bg_h - 1)], radius=radius, fill=255
-    )
+    mask = _rounded_mask((bg_w, bg_h), radius)
     canvas.paste(blurred, (bg_x0, bg_y0), mask)
 
-    tint = Image.new("RGBA", (bg_w, bg_h), (0, 0, 0, 0))
-    ImageDraw.Draw(tint).rounded_rectangle(
-        [(0, 0), (bg_w - 1, bg_h - 1)],
-        radius=radius,
-        fill=color_rgb + (LABEL_BG_ALPHA,),
-    )
-    canvas.paste(tint, (bg_x0, bg_y0), tint)
+    tint = Image.new("RGBA", (bg_w, bg_h), color_rgb + (LABEL_BG_ALPHA,))
+    canvas.paste(tint, (bg_x0, bg_y0), mask)
 
     draw = ImageDraw.Draw(canvas)
     line_h = _line_height(font)
@@ -349,9 +509,10 @@ def render(
     base_font_size = max(20, stroke_width * 4)
     gap = max(stroke_width * 2, 12)
     margin = max(stroke_width, 8)
-    label_pad_x = max(stroke_width + 2, 10)
-    label_pad_y = max(stroke_width // 2 + 2, 6)
+    label_pad_x = max(stroke_width * 2, 18)
+    label_pad_y = max(stroke_width, 10)
     blur_radius = max(6, stroke_width * 2)
+    rectangle_stroke = max(2.5, round(stroke_width * 0.45))
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     measure_draw = ImageDraw.Draw(overlay)
@@ -362,31 +523,31 @@ def render(
             layouts.append(None)
             continue
 
+        render_bbox = _render_bbox(ann, (img_w, img_h), stroke_width)
         default_rgb = _parse_color(default_color)
         color_rgb = _parse_color(ann.color, fallback=default_rgb)
-        _draw_translucent_rectangle(overlay, ann.bbox, color_rgb, stroke_width)
+        _draw_translucent_rectangle(overlay, render_bbox, color_rgb, rectangle_stroke)
 
         if ann.label_text and ann.label_text.strip():
             layout = _fit_label(
-                ann.bbox,
+                render_bbox,
                 ann.label_text.strip(),
                 (img_w, img_h),
                 base_font_size,
                 font_path,
                 gap,
                 margin,
+                label_pad_x,
+                label_pad_y,
                 measure_draw,
             )
             layout["color_rgb"] = color_rgb
             layouts.append(layout)
 
             label_rect = (
-                layout["lx"],
-                layout["ly"],
-                layout["lx"] + layout["text_w"],
-                layout["ly"] + layout["text_h"],
+                *layout["bg_rect"],
             )
-            arrow_start, arrow_end = _arrow_endpoints(label_rect, ann.bbox)
+            arrow_start, arrow_end = _arrow_endpoints(label_rect, render_bbox)
             _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width)
         else:
             layouts.append(None)
@@ -400,8 +561,6 @@ def render(
             canvas,
             layout,
             layout["color_rgb"],
-            label_pad_x,
-            label_pad_y,
             blur_radius,
         )
 

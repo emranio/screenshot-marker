@@ -1,0 +1,36 @@
+{
+  "output_path": "tests/rendered/06-writing.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "rectangle around the 'Default Post Category' and 'Default Post Format' rows at the top of the Writing Settings form, label 'Set AI content defaults'",
+      "target_description": "The top two form rows in Writing Settings: Default Post Category and Default Post Format",
+      "label_text": "Set AI content defaults",
+      "bbox": {
+        "x": 154,
+        "y": 106,
+        "width": 387,
+        "height": 117
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "red box with an arrow on the blue 'Save Changes' button at the bottom, label 'Save'",
+      "target_description": "Blue Save Changes button at the bottom of the Writing Settings page",
+      "label_text": "Save",
+      "bbox": {
+        "x": 179,
+        "y": 834,
+        "width": 127,
+        "height": 41
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    }
+  ],
+  "unresolved": []
+}

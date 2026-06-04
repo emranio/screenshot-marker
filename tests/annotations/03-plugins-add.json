@@ -1,0 +1,51 @@
+{
+  "output_path": "tests/rendered/03-plugins-add.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "rectangle with an arrow on the 'Upload Plugin' button next to the 'Add Plugins' page title, label 'Upload an AI plugin zip'",
+      "target_description": "Upload Plugin button next to the Add Plugins page title at the top of the content area",
+      "label_text": "Upload an AI plugin zip",
+      "bbox": {
+        "x": 299,
+        "y": 51,
+        "width": 122,
+        "height": 29
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "rectangle around the 'Search plugins' input box in the top right, label 'Or search: AI'",
+      "target_description": "Search Plugins text input box in the top right of the plugins filter bar",
+      "label_text": "Or search: AI",
+      "bbox": {
+        "x": 1030,
+        "y": 144,
+        "width": 280,
+        "height": 31
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 2,
+      "request_text": "draw a rectangle around the whole plugin card in the right column of the second row, titled 'Vereal AI Gateway Provider' with 'By Vereal' beneath it and an 'Install Now' button, label 'Example: AI provider'",
+      "target_description": "Plugin card in the right column of the second row for the Vercel AI Gateway Provider plugin",
+      "label_text": "Example: AI provider",
+      "bbox": {
+        "x": 734,
+        "y": 532,
+        "width": 686,
+        "height": 221
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    }
+  ],
+  "unresolved": []
+}

@@ -152,6 +152,11 @@ LOCATING THE TARGET — PRECISION RULES
 - For elements without a visible border (text labels, icons, plain regions):
   align tightly to the outer bounds of the visible content. Do not include
   surrounding empty space.
+- For text, links, headings, and placeholders: return the full visual line
+  box, not just the ink/glyph bounds. Include ascenders, descenders,
+  underline, and a small amount of natural line-height breathing room. If
+  unsure, bias the top edge slightly upward and the bottom edge slightly
+  downward rather than returning a short box that cuts through the text.
 - Sanity-check: the four corners of your bbox must land on the target's
   corners, not in a neighbour or in white space.
 
@@ -273,6 +278,9 @@ LOCATING RULES:
   not inside the content area, not in the surrounding margin.
 - Include the full element — header / title bar, internal padding, footer.
 - Do not include surrounding empty space outside the element.
+- For text, links, headings, and placeholders: return the full visual line
+  box, not only the glyph ink. Include underline/descenders and avoid a
+  bbox that sits low or cuts through the text.
 - Sanity-check: the four corners of the bbox must land on the target's
   corners."""
 

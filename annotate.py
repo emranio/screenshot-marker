@@ -3,9 +3,9 @@
 
 Examples:
 
-  python annotate.py --image test_1.jpeg --output out.png --query "red box + arrow on the customer info card, label 'Customer Details'"   --query "rectangle around the payment timeline labeled 'Activity Log'"
+  python annotate.py --image tests/screens/test_1.jpeg --output tests/rendered/test_1.png --query "red box + arrow on the customer info card, label 'Customer Details'"   --query "rectangle around the payment timeline labeled 'Activity Log'"
 
-  python annotate.py --image test.jpeg --output out.png --queries-file queries.json
+  python annotate.py --image tests/screens/test_1.jpeg --output tests/rendered/test_1.png --queries-file tests/annotations/test_1.json
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--queries-file",
         type=Path,
-        help="Path to a JSON file containing a list of query strings.",
+        help="Path to a JSON array of query strings, or a saved annotation result JSON.",
     )
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Vision model (default: {DEFAULT_MODEL}).")
     p.add_argument("--color", default=DEFAULT_COLOR, help=f"Default annotation color (default: {DEFAULT_COLOR}).")
@@ -61,9 +61,23 @@ def _collect_queries(args: argparse.Namespace) -> list[str]:
     queries: list[str] = list(args.query)
     if args.queries_file:
         data = json.loads(args.queries_file.read_text())
-        if not isinstance(data, list) or not all(isinstance(s, str) for s in data):
-            raise SystemExit(f"--queries-file must contain a JSON array of strings: {args.queries_file}")
-        queries.extend(data)
+        if isinstance(data, list) and all(isinstance(s, str) for s in data):
+            queries.extend(data)
+        elif isinstance(data, dict) and isinstance(data.get("annotations"), list):
+            extracted = [
+                ann.get("request_text")
+                for ann in data["annotations"]
+                if isinstance(ann, dict) and isinstance(ann.get("request_text"), str)
+            ]
+            if len(extracted) != len(data["annotations"]):
+                raise SystemExit(
+                    f"--queries-file annotations must all contain request_text: {args.queries_file}"
+                )
+            queries.extend(extracted)
+        else:
+            raise SystemExit(
+                f"--queries-file must contain a JSON array of strings or an annotation result JSON: {args.queries_file}"
+            )
     if not queries:
         raise SystemExit("Provide at least one --query or --queries-file.")
     return queries

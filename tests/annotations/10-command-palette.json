@@ -1,0 +1,36 @@
+{
+  "output_path": "tests/rendered/10-command-palette.png",
+  "annotations": [
+    {
+      "request_index": 0,
+      "request_text": "rectangle around the search input at the top of the open command palette popup that contains the typed text 'AI', label 'Type AI to search'",
+      "target_description": "Search input field at the top of the centered command palette popup containing the text AI",
+      "label_text": "Type AI to search",
+      "bbox": {
+        "x": 576,
+        "y": 156,
+        "width": 337,
+        "height": 42
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    },
+    {
+      "request_index": 1,
+      "request_text": "draw a rectangle around the list of command results shown below the search box inside the popup, label 'Pick a command, hit Enter'",
+      "target_description": "List of command results inside the centered command palette popup below the search input",
+      "label_text": "Pick a command, hit Enter",
+      "bbox": {
+        "x": 528,
+        "y": 213,
+        "width": 392,
+        "height": 394
+      },
+      "color": null,
+      "not_found": false,
+      "notes": ""
+    }
+  ],
+  "unresolved": []
+}
