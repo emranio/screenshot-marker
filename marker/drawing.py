@@ -156,6 +156,28 @@ def _rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
     return mask
 
 
+def _rect_overlap_area(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    pad: float = 0,
+) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    bx0 -= pad
+    by0 -= pad
+    bx1 += pad
+    by1 += pad
+    width = min(ax1, bx1) - max(ax0, bx0)
+    height = min(ay1, by1) - max(ay0, by0)
+    if width <= 0 or height <= 0:
+        return 0
+    return width * height
+
+
+def _bbox_rect(bbox: Bbox) -> tuple[int, int, int, int]:
+    return (bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height)
+
+
 def _clamp_bbox(x0: int, y0: int, x1: int, y1: int, image_size: tuple[int, int]) -> Bbox:
     img_w, img_h = image_size
     x0 = max(0, min(x0, img_w - 1))
@@ -258,6 +280,7 @@ def _fit_label(
     pad_x: int,
     pad_y: int,
     draw: ImageDraw.ImageDraw,
+    avoid_rects: list[tuple[float, float, float, float]] | None = None,
 ) -> dict:
     """Pick the best label layout: vertical side, horizontal alignment, font size, wrapping.
 
@@ -281,6 +304,12 @@ def _fit_label(
     horizontal_options = ["left", "right"]
     scales = (1.0, 0.85, 0.7, 0.55)
     line_options = (1, 2, 3)
+    collision_pad = max(8, gap * 0.2)
+    best_colliding_layout: dict | None = None
+    best_collision_score: float | None = None
+
+    def collision_score(rect: tuple[float, float, float, float]) -> float:
+        return sum(_rect_overlap_area(rect, avoid, collision_pad) for avoid in avoid_rects or [])
 
     for vertical in vertical_options:
         max_bg_h = space_below if vertical == "below" else space_above
@@ -319,7 +348,7 @@ def _fit_label(
                     bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
                     lx = bg_x0 + pad_x
                     ly = bg_y0 + pad_y
-                    return {
+                    layout = {
                         "font": font,
                         "lines": lines,
                         "text_w": w,
@@ -330,6 +359,15 @@ def _fit_label(
                         "vertical": vertical,
                         "horizontal": horizontal,
                     }
+                    score = collision_score(layout["bg_rect"])
+                    if score <= 0:
+                        return layout
+                    if best_collision_score is None or score < best_collision_score:
+                        best_collision_score = score
+                        best_colliding_layout = layout
+
+    if best_colliding_layout is not None:
+        return best_colliding_layout
 
     # Final fallback: smallest font, force-fit single block, BL preferred.
     font = _load_font(font_path, MIN_FONT_SIZE)
@@ -499,18 +537,29 @@ def _draw_arrow(
         def point(p: tuple[float, float]) -> tuple[float, float]:
             return ((p[0] - left) * scale, (p[1] - top) * scale)
 
+        def round_line(
+            line_points: list[tuple[float, float]],
+            *,
+            fill: tuple[int, int, int, int],
+            width: int,
+            joint: str | None = None,
+        ) -> None:
+            if len(line_points) < 2:
+                return
+            if joint is None:
+                draw.line(line_points, fill=fill, width=width)
+            else:
+                draw.line(line_points, fill=fill, width=width, joint=joint)
+            radius = width / 2
+            for x, y in (line_points[0], line_points[-1]):
+                draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill=fill)
+
         scaled_points = [point(p) for p in points]
         line_width = max(1, round(arrow_stroke * scale))
-        draw.line(scaled_points, fill=color_rgba, width=line_width, joint="curve")
-        tail_x, tail_y = scaled_points[0]
-        radius = line_width / 2
-        draw.ellipse(
-            [tail_x - radius, tail_y - radius, tail_x + radius, tail_y + radius],
-            fill=color_rgba,
-        )
+        round_line(scaled_points, fill=color_rgba, width=line_width, joint="curve")
         head_width = max(1, round(arrow_stroke * 0.95 * scale))
-        draw.line([point(wing_left), point(end)], fill=color_rgba, width=head_width)
-        draw.line([point(wing_right), point(end)], fill=color_rgba, width=head_width)
+        round_line([point(wing_left), point(end)], fill=color_rgba, width=head_width)
+        round_line([point(wing_right), point(end)], fill=color_rgba, width=head_width)
 
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
@@ -632,19 +681,36 @@ def render(
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     measure_draw = ImageDraw.Draw(overlay)
+    default_rgb = _parse_color(default_color)
 
-    layouts: list[Optional[dict]] = []
+    render_items: list[Optional[dict]] = []
     for ann in annotations:
         if ann.not_found or ann.bbox is None:
-            layouts.append(None)
+            render_items.append(None)
             continue
 
         render_bbox = _render_bbox(ann, (img_w, img_h), stroke_width)
-        default_rgb = _parse_color(default_color)
         color_rgb = _parse_color(ann.color, fallback=default_rgb)
+        render_items.append({"annotation": ann, "bbox": render_bbox, "color_rgb": color_rgb})
+
+    layouts: list[Optional[dict]] = []
+    for index, item in enumerate(render_items):
+        if item is None:
+            layouts.append(None)
+            continue
+
+        ann: Annotation = item["annotation"]
+        render_bbox: Bbox = item["bbox"]
+        color_rgb: tuple[int, int, int] = item["color_rgb"]
         _draw_translucent_rectangle(overlay, render_bbox, color_rgb, rectangle_stroke)
 
         if ann.label_text and ann.label_text.strip():
+            avoid_rects = [
+                _bbox_rect(other["bbox"])
+                for other_index, other in enumerate(render_items)
+                if other is not None and other_index != index
+            ]
+            avoid_rects.extend(layout["bg_rect"] for layout in layouts if layout is not None)
             layout = _fit_label(
                 render_bbox,
                 ann.label_text.strip(),
@@ -656,6 +722,7 @@ def render(
                 label_pad_x,
                 label_pad_y,
                 measure_draw,
+                avoid_rects,
             )
             layout["color_rgb"] = color_rgb
             layouts.append(layout)
