@@ -275,7 +275,6 @@ screenshot-marker/
 │   ├── vision.py           # OpenAI call, prompt, schema
 │   ├── parser.py           # JSON → typed annotations + sanity check
 │   ├── drawing.py          # Pillow rendering: outline, arrow, label, bg
-│   ├── shapes/             # Reference arrow PNGs, not used by renderer
 │   ├── models.py           # Pydantic schemas
 │   └── config.py           # Defaults + env loading
 ├── tests/

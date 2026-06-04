@@ -451,8 +451,8 @@ def _draw_arrow(
         tangent_len = desired_len
     ux, uy = tx / tangent_len, ty / tangent_len
 
-    head_len = max(arrow_stroke * 2.8, 12)
-    head_angle = math.radians(34)
+    head_len = max(arrow_stroke * 3.8, 18)
+    head_angle = math.radians(44)
     tangent_angle = math.atan2(uy, ux)
     wing_left = (
         end[0] + math.cos(tangent_angle + math.pi - head_angle) * head_len,
@@ -462,11 +462,28 @@ def _draw_arrow(
         end[0] + math.cos(tangent_angle + math.pi + head_angle) * head_len,
         end[1] + math.sin(tangent_angle + math.pi + head_angle) * head_len,
     )
+    shaft_inset = min(max(arrow_stroke * 2.8, head_len * 0.82), desired_len * 0.55)
+    shaft_end = (end[0] - ux * shaft_inset, end[1] - uy * shaft_inset)
+    shaft_points = [
+        point
+        for point in points
+        if math.hypot(end[0] - point[0], end[1] - point[1]) > shaft_inset
+    ]
+    if not shaft_points:
+        shaft_points = [start]
+    if (
+        math.hypot(
+            shaft_points[-1][0] - shaft_end[0],
+            shaft_points[-1][1] - shaft_end[1],
+        )
+        > 1
+    ):
+        shaft_points.append(shaft_end)
 
     color_rgba = color_rgb + (ARROW_ALPHA,)
     bounds = _shape_bounds(
         overlay,
-        points + [end, wing_left, wing_right],
+        shaft_points + [end, wing_left, wing_right],
         pad=arrow_stroke * 3,
     )
 
@@ -474,7 +491,7 @@ def _draw_arrow(
         def point(p: tuple[float, float]) -> tuple[float, float]:
             return ((p[0] - left) * scale, (p[1] - top) * scale)
 
-        scaled_points = [point(p) for p in points]
+        scaled_points = [point(p) for p in shaft_points]
         line_width = max(1, round(arrow_stroke * scale))
         draw.line(scaled_points, fill=color_rgba, width=line_width, joint="curve")
         tail_x, tail_y = scaled_points[0]
@@ -483,8 +500,9 @@ def _draw_arrow(
             [tail_x - radius, tail_y - radius, tail_x + radius, tail_y + radius],
             fill=color_rgba,
         )
-        draw.line([point(wing_left), point(end)], fill=color_rgba, width=line_width)
-        draw.line([point(wing_right), point(end)], fill=color_rgba, width=line_width)
+        head_width = max(1, round(arrow_stroke * 0.9 * scale))
+        draw.line([point(wing_left), point(end)], fill=color_rgba, width=head_width)
+        draw.line([point(wing_right), point(end)], fill=color_rgba, width=head_width)
 
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
