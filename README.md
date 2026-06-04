@@ -10,7 +10,7 @@ tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled
                          + "rectangle around the Annotations tab labeled 'Active tab'"
                                              ↓
                 tests/rendered/test_2.png  (smooth translucent outlines,
-                                           opaque arrows, capsule labels)
+                                           bent asset arrows, capsule labels)
 ```
 
 - One LLM round‑trip per call regardless of how many queries you pass.
@@ -231,11 +231,11 @@ Tips:
    │  map back to image coords                                    │
    └──────────┬───────────────────────────────────────────────────┘
               ▼
-   ┌──── render (Pillow) ─────┐
-   │  antialiased outline     │
-   │  blurred capsule label   │
-   │  opaque auto‑placed arrow│
-   └──────────┬────────────────┘
+   ┌──── render (Pillow) ─────────┐
+   │  antialiased outline         │
+   │  blurred capsule label       │
+   │  recolored bent arrow asset  │
+   └──────────┬───────────────────┘
               ▼
         annotated PNG
 ```
@@ -253,6 +253,10 @@ Tips:
   default and falls back to top‑left, bottom‑right, or top‑right when
   there isn't room. The arrow is drawn from the capsule edge to the nearest
   bbox edge.
+- **Bent arrow assets** — arrows are rendered from PNG assets in
+  `marker/shapes/`. The renderer chooses a short or long curved arrow,
+  recolors it to the annotation color, and rotates/scales it between the
+  label capsule and the target.
 - **Text bbox breathing room** — very tight text/link/heading boxes get a
   small render-time expansion so outlines don't cut through glyphs or sit too
   low on the line.
@@ -270,6 +274,7 @@ screenshot-marker/
 │   ├── vision.py           # OpenAI call, prompt, schema
 │   ├── parser.py           # JSON → typed annotations + sanity check
 │   ├── drawing.py          # Pillow rendering: outline, arrow, label, bg
+│   ├── shapes/             # Bent arrow PNG assets
 │   ├── models.py           # Pydantic schemas
 │   └── config.py           # Defaults + env loading
 ├── tests/

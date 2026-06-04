@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
@@ -16,6 +18,11 @@ LABEL_TEXT_RGB = (255, 255, 255)
 MIN_FONT_SIZE = 14
 ANTIALIAS_SCALE = 3
 MAX_SUPERSAMPLED_PIXELS = 48_000_000
+SHAPES_DIR = Path(__file__).with_name("shapes")
+SHORT_CURVED_ARROW = "short-tail-curved-arrow.png"
+LONG_CURVED_ARROW = "long-tail-curved-arrow.png"
+SHORT_STRAIGHT_ARROW = "short-tail-straight-arrow.png"
+LONG_STRAIGHT_ARROW = "long-tail-straight-arrow.png"
 
 
 def _load_font(font_path: Optional[str], size: int) -> ImageFont.ImageFont:
@@ -366,7 +373,7 @@ def _draw_translucent_rectangle(
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
-def _draw_arrow(
+def _draw_vector_arrow(
     overlay: Image.Image,
     start: tuple[float, float],
     end: tuple[float, float],
@@ -417,36 +424,214 @@ def _draw_arrow(
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
+@lru_cache(maxsize=8)
+def _load_arrow_asset(name: str) -> tuple[Image.Image, tuple[float, float], tuple[float, float]]:
+    path = SHAPES_DIR / name
+    image = Image.open(path).convert("RGBA")
+    alpha = image.getchannel("A")
+    pixels = alpha.load()
+
+    solid: list[tuple[int, int, int]] = []
+    visible: list[tuple[int, int, int]] = []
+    for y in range(image.height):
+        for x in range(image.width):
+            a = pixels[x, y]
+            if a > 24:
+                visible.append((x, y, a))
+                if a > 128:
+                    solid.append((x, y, a))
+    points = solid or visible
+    if not points:
+        raise ValueError(f"Arrow asset has no visible pixels: {path}")
+
+    min_x = min(x for x, _, _ in points)
+    max_x = max(x for x, _, _ in points)
+    band_w = max(4, round(image.width * 0.015))
+    head_band = [(x, y, a) for x, y, a in points if x <= min_x + band_w]
+    tail_band = [(x, y, a) for x, y, a in points if x >= max_x - band_w]
+
+    def weighted_center_y(band: list[tuple[int, int, int]]) -> float:
+        total_alpha = sum(a for _, _, a in band)
+        if total_alpha <= 0:
+            return sum(y for _, y, _ in band) / len(band)
+        return sum(y * a for _, y, a in band) / total_alpha
+
+    # Asset convention: arrowhead is on the left, tail is on the right.
+    # Anchor to edge centers so the visible tail stays at the label.
+    head = (float(min_x), weighted_center_y(head_band))
+    tail = (float(max_x), weighted_center_y(tail_band))
+    return image, head, tail
+
+
+def _tinted_arrow_asset(asset: Image.Image, color_rgb: tuple[int, int, int]) -> Image.Image:
+    alpha = asset.getchannel("A")
+    if ARROW_ALPHA < 255:
+        alpha = alpha.point(lambda a: round(a * ARROW_ALPHA / 255))
+    tinted = Image.new("RGBA", asset.size, color_rgb + (255,))
+    tinted.putalpha(alpha)
+    return tinted
+
+
+def _rotate_point(
+    point: tuple[float, float],
+    center: tuple[float, float],
+    angle_rad: float,
+) -> tuple[float, float]:
+    px, py = point
+    cx, cy = center
+    dx = px - cx
+    dy = py - cy
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    return (
+        cx + dx * cos_a - dy * sin_a,
+        cy + dx * sin_a + dy * cos_a,
+    )
+
+
+def _rotated_anchor_position(
+    size: tuple[int, int],
+    anchor: tuple[float, float],
+    angle_deg: float,
+) -> tuple[float, float]:
+    width, height = size
+    center = (width / 2, height / 2)
+    angle_rad = math.radians(angle_deg)
+    corners = [
+        _rotate_point((0, 0), center, angle_rad),
+        _rotate_point((width, 0), center, angle_rad),
+        _rotate_point((width, height), center, angle_rad),
+        _rotate_point((0, height), center, angle_rad),
+    ]
+    min_x = min(x for x, _ in corners)
+    min_y = min(y for _, y in corners)
+    ax, ay = _rotate_point(anchor, center, angle_rad)
+    return ax - min_x, ay - min_y
+
+
+def _alpha_composite_clipped(
+    target: Image.Image,
+    source: Image.Image,
+    xy: tuple[int, int],
+) -> None:
+    x, y = xy
+    left = max(0, x)
+    top = max(0, y)
+    right = min(target.width, x + source.width)
+    bottom = min(target.height, y + source.height)
+    if right <= left or bottom <= top:
+        return
+
+    crop = source.crop((left - x, top - y, right - x, bottom - y))
+    target.alpha_composite(crop, (left, top))
+
+
+def _draw_arrow(
+    overlay: Image.Image,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    color_rgb: tuple[int, int, int],
+    stroke: int,
+    style: str = "curved",
+) -> None:
+    sx, sy = start
+    ex, ey = end
+    dx = ex - sx
+    dy = ey - sy
+    desired_len = math.hypot(dx, dy)
+    if desired_len < 1:
+        return
+
+    asset_name = _select_arrow_asset(style, desired_len, stroke)
+    try:
+        asset, head, tail = _load_arrow_asset(asset_name)
+    except (OSError, ValueError):
+        _draw_vector_arrow(overlay, start, end, color_rgb, stroke)
+        return
+
+    base_dx = head[0] - tail[0]
+    base_dy = head[1] - tail[1]
+    base_len = math.hypot(base_dx, base_dy)
+    if base_len < 1:
+        _draw_vector_arrow(overlay, start, end, color_rgb, stroke)
+        return
+
+    scale = max(0.035, desired_len / base_len)
+    scaled_w = max(8, round(asset.width * scale))
+    scaled_h = max(8, round(asset.height * scale))
+    resized = _tinted_arrow_asset(asset, color_rgb).resize(
+        (scaled_w, scaled_h),
+        Image.Resampling.LANCZOS,
+    )
+    scaled_head = (head[0] * scale, head[1] * scale)
+    scaled_tail = (tail[0] * scale, tail[1] * scale)
+
+    base_angle = math.degrees(math.atan2(scaled_head[1] - scaled_tail[1], scaled_head[0] - scaled_tail[0]))
+    desired_angle = math.degrees(math.atan2(dy, dx))
+    angle = desired_angle - base_angle
+
+    rotated = resized.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+    tail_after_rotate = _rotated_anchor_position(resized.size, scaled_tail, angle)
+    paste_x = round(sx - tail_after_rotate[0])
+    paste_y = round(sy - tail_after_rotate[1])
+    _alpha_composite_clipped(overlay, rotated, (paste_x, paste_y))
+
+
+def _select_arrow_asset(style: str, length: float, stroke: int) -> str:
+    is_long = length >= 120
+    if style == "straight":
+        return LONG_STRAIGHT_ARROW if is_long else SHORT_STRAIGHT_ARROW
+    return LONG_CURVED_ARROW if is_long else SHORT_CURVED_ARROW
+
+
 def _arrow_endpoints(
     label_rect: tuple[int, int, int, int], bbox: Bbox
-) -> tuple[tuple[float, float], tuple[float, float]]:
+) -> tuple[tuple[float, float], tuple[float, float], str]:
     """Pick a clean start (on label edge) and end (on bbox edge) for the arrow."""
     lx, ly, lx2, ly2 = label_rect
     bx, by = bbox.x, bbox.y
     bx2, by2 = bbox.x + bbox.width, bbox.y + bbox.height
     label_cx = (lx + lx2) / 2
+    label_cy = (ly + ly2) / 2
+    bbox_cx = (bx + bx2) / 2
+    bbox_cy = (by + by2) / 2
+    x_offset = min(max(36, (lx2 - lx) * 0.22), max(40, bbox.width * 0.35))
+    y_offset = min(max(28, (ly2 - ly) * 0.55), max(32, bbox.height * 0.35))
+    edge_gap = 6
 
     if ly >= by2:  # label below bbox → arrow points up
         sx = label_cx
-        sy = ly
-        ex = max(bx + 4, min(label_cx, bx2 - 4))
-        ey = by2
+        sy = ly - edge_gap
+        centered = abs(label_cx - bbox_cx) <= max(24, min((lx2 - lx) * 0.18, bbox.width * 0.3))
+        raw_ex = label_cx if centered else label_cx - x_offset if label_cx >= bbox_cx else label_cx + x_offset
+        ex = max(bx + 4, min(raw_ex, bx2 - 4))
+        ey = by2 + edge_gap
+        style = "straight" if centered else "curved"
     elif ly2 <= by:  # label above bbox → arrow points down
         sx = label_cx
-        sy = ly2
-        ex = max(bx + 4, min(label_cx, bx2 - 4))
-        ey = by
+        sy = ly2 + edge_gap
+        centered = abs(label_cx - bbox_cx) <= max(24, min((lx2 - lx) * 0.18, bbox.width * 0.3))
+        raw_ex = label_cx if centered else label_cx + x_offset if label_cx >= bbox_cx else label_cx - x_offset
+        ex = max(bx + 4, min(raw_ex, bx2 - 4))
+        ey = by - edge_gap
+        style = "straight" if centered else "curved"
     elif lx >= bx2:  # label to the right → arrow points left
-        sx = lx
-        sy = (ly + ly2) / 2
-        ex = bx2
-        ey = max(by + 4, min((ly + ly2) / 2, by2 - 4))
+        sx = lx - edge_gap
+        sy = label_cy
+        ex = bx2 + edge_gap
+        centered = abs(label_cy - bbox_cy) <= max(20, min((ly2 - ly) * 0.45, bbox.height * 0.3))
+        raw_ey = label_cy if centered else label_cy - y_offset if label_cy >= bbox_cy else label_cy + y_offset
+        ey = max(by + 4, min(raw_ey, by2 - 4))
+        style = "straight" if centered else "curved"
     else:  # label to the left → arrow points right
-        sx = lx2
-        sy = (ly + ly2) / 2
-        ex = bx
-        ey = max(by + 4, min((ly + ly2) / 2, by2 - 4))
-    return (sx, sy), (ex, ey)
+        sx = lx2 + edge_gap
+        sy = label_cy
+        ex = bx - edge_gap
+        centered = abs(label_cy - bbox_cy) <= max(20, min((ly2 - ly) * 0.45, bbox.height * 0.3))
+        raw_ey = label_cy if centered else label_cy + y_offset if label_cy >= bbox_cy else label_cy - y_offset
+        ey = max(by + 4, min(raw_ey, by2 - 4))
+        style = "straight" if centered else "curved"
+    return (sx, sy), (ex, ey), style
 
 
 def _render_label_with_blur_bg(
@@ -507,7 +692,7 @@ def render(
     img_w, img_h = canvas.size
 
     base_font_size = max(20, stroke_width * 4)
-    gap = max(stroke_width * 2, 12)
+    gap = max(stroke_width * 6, 48)
     margin = max(stroke_width, 8)
     label_pad_x = max(stroke_width * 2, 18)
     label_pad_y = max(stroke_width, 10)
@@ -547,8 +732,8 @@ def render(
             label_rect = (
                 *layout["bg_rect"],
             )
-            arrow_start, arrow_end = _arrow_endpoints(label_rect, render_bbox)
-            _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width)
+            arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
+            _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
         else:
             layouts.append(None)
 
