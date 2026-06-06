@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the search input at the top of the open command palette popup that contains the typed text 'AI', label 'Type AI to search'",
-      "target_description": "Search input field at the top of the centered command palette popup containing the text AI",
+      "target_description": "search input field at the top of the command palette popup containing the text AI",
       "label_text": "Type AI to search",
       "bbox": {
-        "x": 576,
-        "y": 156,
-        "width": 337,
-        "height": 42
+        "x": 573,
+        "y": 155,
+        "width": 347,
+        "height": 62
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "draw a rectangle around the list of command results shown below the search box inside the popup, label 'Pick a command, hit Enter'",
-      "target_description": "List of command results inside the centered command palette popup below the search input",
+      "target_description": "list of command results below the search input inside the command palette popup",
       "label_text": "Pick a command, hit Enter",
       "bbox": {
         "x": 528,
-        "y": 213,
-        "width": 392,
-        "height": 394
+        "y": 250,
+        "width": 385,
+        "height": 328
       },
       "color": null,
       "not_found": false,

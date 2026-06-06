@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the 'Site restructure' row labeled 'Latest annotation'",
-      "target_description": "The first annotation list row titled 'Site restructure'",
+      "target_description": "Top annotation list row titled Site restructure",
       "label_text": "Latest annotation",
       "bbox": {
-        "x": 31,
-        "y": 224,
-        "width": 2507,
-        "height": 261
+        "x": 1,
+        "y": 190,
+        "width": 2569,
+        "height": 308
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the Annotations tab labeled 'Active tab'",
-      "target_description": "Annotations tab in the top navigation",
+      "target_description": "Annotations tab in the top navigation bar",
       "label_text": "Active tab",
       "bbox": {
-        "x": 258,
-        "y": 99,
-        "width": 92,
-        "height": 42
+        "x": 215,
+        "y": 133,
+        "width": 176,
+        "height": 40
       },
       "color": null,
       "not_found": false,

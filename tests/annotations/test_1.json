@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "red box on the customer info section, label 'Customer Details'",
-      "target_description": "Customer Information card on the right side of the subscription details page",
+      "target_description": "Customer Information panel in the right column below Retention Offers",
       "label_text": "Customer Details",
       "bbox": {
-        "x": 2640,
-        "y": 1865,
-        "width": 1976,
-        "height": 934
+        "x": 2641,
+        "y": 1866,
+        "width": 1961,
+        "height": 861
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the payment timeline labeled 'Activity Log'",
-      "target_description": "Payment Timeline card in the lower-left area of the subscription details page",
+      "target_description": "Payment Timeline panel in the lower left column",
       "label_text": "Activity Log",
       "bbox": {
-        "x": 634,
-        "y": 5553,
-        "width": 1982,
-        "height": 2024
+        "x": 478,
+        "y": 5561,
+        "width": 2059,
+        "height": 2050
       },
       "color": null,
       "not_found": false,

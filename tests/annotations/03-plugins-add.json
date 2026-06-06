@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle with an arrow on the 'Upload Plugin' button next to the 'Add Plugins' page title, label 'Upload an AI plugin zip'",
-      "target_description": "Upload Plugin button next to the Add Plugins page title at the top of the content area",
+      "target_description": "Upload Plugin button beside the Add Plugins page title near the top left",
       "label_text": "Upload an AI plugin zip",
       "bbox": {
-        "x": 299,
-        "y": 51,
-        "width": 122,
-        "height": 29
+        "x": 297,
+        "y": 49,
+        "width": 125,
+        "height": 33
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the 'Search plugins' input box in the top right, label 'Or search: AI'",
-      "target_description": "Search Plugins text input box in the top right of the plugins filter bar",
+      "target_description": "Search Plugins text input field in the top right of the plugins toolbar",
       "label_text": "Or search: AI",
       "bbox": {
         "x": 1030,
-        "y": 144,
-        "width": 280,
-        "height": 31
+        "y": 143,
+        "width": 281,
+        "height": 28
       },
       "color": null,
       "not_found": false,
@@ -34,13 +34,13 @@
     {
       "request_index": 2,
       "request_text": "draw a rectangle around the whole plugin card in the right column of the second row, titled 'Vereal AI Gateway Provider' with 'By Vereal' beneath it and an 'Install Now' button, label 'Example: AI provider'",
-      "target_description": "Plugin card in the right column of the second row for the Vercel AI Gateway Provider plugin",
+      "target_description": "Plugin card in the right column of the second row titled Vercel AI Gateway Provider with Install Now button",
       "label_text": "Example: AI provider",
       "bbox": {
-        "x": 734,
-        "y": 532,
-        "width": 686,
-        "height": 221
+        "x": 810,
+        "y": 500,
+        "width": 609,
+        "height": 252
       },
       "color": null,
       "not_found": false,
