@@ -1,40 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import base64
-import io
 import json
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-from .config import get_api_key
+from .config import get_codex_api_key, resolve_auth_mode, resolve_reasoning_effort
 from .models import NormalizedBbox
 
-_FORMAT_TO_MIME = {
-    "JPEG": "image/jpeg",
-    "PNG": "image/png",
-    "WEBP": "image/webp",
-    "GIF": "image/gif",
-    "BMP": "image/bmp",
-}
-
-
-def encode_image(path: str | Path) -> tuple[str, str, int, int]:
-    """Returns (base64_data, mime_type, width, height)."""
-    path = Path(path)
+def image_size(path: str | Path) -> tuple[int, int]:
     with Image.open(path) as img:
-        width, height = img.size
-        fmt = (img.format or "PNG").upper()
-        mime = _FORMAT_TO_MIME.get(fmt)
-        if mime is None:
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="PNG")
-            data = buf.getvalue()
-            mime = "image/png"
-        else:
-            data = path.read_bytes()
-    return base64.b64encode(data).decode("ascii"), mime, width, height
+        return img.size
 
 
 _NORMALIZED_BBOX_SCHEMA = {
@@ -138,15 +120,31 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
 LOCATING THE TARGET — PRECISION RULES
 ============================================================
 
+- FIRST identify the exact requested target before thinking about coordinates.
+  If the request says "row", "card", "button", "tab", "input", or a quoted
+  label, find that actual UI object, not a nearby label, icon, column, group,
+  container, or empty region. If multiple similar objects exist and the request
+  does not disambiguate them, return not_found=true.
 - Determine each of the four edges INDEPENDENTLY. Find the target's LEFT edge
   (smallest x), TOP edge (smallest y), RIGHT edge (largest x), BOTTOM edge
   (largest y). Then x = left, y = top, width = right - left,
   height = bottom - top. Do NOT estimate x and width together — that
   produces a systematic horizontal offset.
+- The bbox MUST be anchored on the target's visual edges. Do not return a
+  rectangle that is merely near the target, centered around the target with
+  extra margin, offset toward the label/callout location, or shifted into blank
+  whitespace. A box that floats beside the target is wrong even if it overlaps
+  the correct row/card/button.
 - For bordered elements (cards, panels, sections, table rows, modals,
   buttons): align bbox edges WITH the visible border stroke. The drawn
   rectangle should land on top of the existing border line — not inside the
   content area, not floating in the surrounding margin.
+- For table/list rows: include the entire row height from row separator to row
+  separator and the row's full horizontal extent within the table/list, unless
+  the request asks for one cell or one piece of text.
+- For tabs and buttons: include the clickable control bounds, including its
+  background/pill/border if visible. Do not box only the text unless the
+  request explicitly asks for the text.
 - Include the element's full extent — header / title bar, internal padding,
   pinned footer all belong inside the bbox.
 - For elements without a visible border (text labels, icons, plain regions):
@@ -159,6 +157,10 @@ LOCATING THE TARGET — PRECISION RULES
   downward rather than returning a short box that cuts through the text.
 - Sanity-check: the four corners of your bbox must land on the target's
   corners, not in a neighbour or in white space.
+- Final overlay check before returning: imagine drawing the rectangle. If any
+  side would visibly miss the target edge, cut through the wrong object, or
+  sit in whitespace with the target outside/partly outside the rectangle,
+  correct the bbox. If you cannot confidently correct it, return not_found=true.
 
 ============================================================
 EXAMPLE — input/output shape (for ONE request)
@@ -191,7 +193,13 @@ a hex string when the user names a non-default color like "blue card" or
 Return ONE annotation per request, in input order, no extras, no omissions."""
 
 
-def build_user_prompt(queries: list[str], width: int, height: int) -> str:
+def build_user_prompt(
+    queries: list[str],
+    width: int,
+    height: int,
+    *,
+    validator_guidance: str | None = None,
+) -> str:
     lines = [
         f"Image dimensions: {width}px wide x {height}px tall.",
         f"Number of annotation requests: {len(queries)}.",
@@ -205,48 +213,163 @@ def build_user_prompt(queries: list[str], width: int, height: int) -> str:
         "Return one annotation object per request, with request_index matching "
         "the bracketed number above and request_text echoing the request verbatim."
     )
+    if validator_guidance:
+        lines.extend(
+            [
+                "",
+                "Additional validator feedback from a previous rendered attempt:",
+                validator_guidance,
+                "",
+                "Use the validator feedback to improve bbox placement, but keep "
+                "request_text equal to the original request line for each item.",
+            ]
+        )
     return "\n".join(lines)
 
 
 def call_vision(
-    image_b64: str,
-    mime: str,
+    image_path: str | Path,
     width: int,
     height: int,
     queries: list[str],
     model: str,
+    *,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
+    validator_guidance: str | None = None,
 ) -> dict[str, Any]:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=get_api_key())
-    user_text = build_user_prompt(queries, width, height)
-    data_url = f"data:{mime};base64,{image_b64}"
-
-    response = client.chat.completions.create(
+    resolved_auth = resolve_auth_mode(auth)
+    resolved_effort = resolve_reasoning_effort(reasoning_effort)
+    user_text = build_user_prompt(
+        queries,
+        width,
+        height,
+        validator_guidance=validator_guidance,
+    )
+    return _call_codex_json(
+        image_paths=[image_path],
+        system_prompt=SYSTEM_PROMPT,
+        user_text=user_text,
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
-                ],
-            },
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "annotations",
-                "strict": True,
-                "schema": RESPONSE_SCHEMA,
-            },
-        },
+        output_schema=RESPONSE_SCHEMA,
+        auth=resolved_auth,
+        api_key=api_key,
+        reasoning_effort=resolved_effort,
     )
 
-    content = response.choices[0].message.content
+
+_CODEX_STRIPPED_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
+_CODEX_IDLE_TIMEOUT_SECONDS = 300
+
+
+def _codex_subprocess_env(
+    source: dict[str, str] | None = None,
+) -> dict[str, str]:
+    env = dict(os.environ if source is None else source)
+    for key in _CODEX_STRIPPED_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
+def _load_codex_sdk() -> tuple[Any, Any, Any]:
+    try:
+        from agents.extensions.experimental.codex import Codex, ThreadOptions, TurnOptions
+    except ImportError as exc:
+        raise RuntimeError(
+            "The Agents SDK Codex path requires openai-agents>=0.17.4. "
+            "Install requirements.txt, run `codex login`, and retry."
+        ) from exc
+    return Codex, ThreadOptions, TurnOptions
+
+
+def _run_async(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
+
+
+def _build_codex_prompt(system_prompt: str, user_text: str) -> str:
+    return "\n\n".join(
+        [
+            system_prompt,
+            user_text,
+            "Return JSON only. Do not modify files or run shell commands.",
+        ]
+    )
+
+
+def _call_codex_json(
+    *,
+    image_paths: list[str | Path],
+    system_prompt: str,
+    user_text: str,
+    model: str,
+    output_schema: dict[str, Any],
+    auth: str,
+    api_key: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    return _run_async(
+        _call_codex_json_async(
+            image_paths=image_paths,
+            system_prompt=system_prompt,
+            user_text=user_text,
+            model=model,
+            output_schema=output_schema,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+    )
+
+
+async def _call_codex_json_async(
+    *,
+    image_paths: list[str | Path],
+    system_prompt: str,
+    user_text: str,
+    model: str,
+    output_schema: dict[str, Any],
+    auth: str,
+    api_key: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    Codex, ThreadOptions, TurnOptions = _load_codex_sdk()
+    resolved_image_paths = [Path(path).expanduser().resolve() for path in image_paths]
+    resolved_api_key = get_codex_api_key(api_key) if auth == "api" else None
+    codex = Codex(env=_codex_subprocess_env(), api_key=resolved_api_key)
+    thread = codex.start_thread(
+        ThreadOptions(
+            model=model,
+            sandbox_mode="read-only",
+            approval_policy="never",
+            web_search_mode="disabled",
+            skip_git_repo_check=True,
+            model_reasoning_effort=reasoning_effort,
+        )
+    )
+    inputs: list[dict[str, str]] = [
+        {"type": "text", "text": _build_codex_prompt(system_prompt, user_text)}
+    ]
+    inputs.extend(
+        {"type": "local_image", "path": str(image_path)}
+        for image_path in resolved_image_paths
+    )
+    turn = await thread.run(
+        inputs,
+        TurnOptions(
+            output_schema=output_schema,
+            idle_timeout_seconds=_CODEX_IDLE_TIMEOUT_SECONDS,
+        ),
+    )
+    content = getattr(turn, "final_response", None)
     if not content:
-        raise RuntimeError("Vision model returned an empty response.")
+        raise RuntimeError("Agents SDK Codex path returned an empty response.")
     return json.loads(content)
 
 
@@ -270,19 +393,39 @@ OUTPUT FORMAT — FOLLOW EXACTLY:
 
 LOCATING RULES:
 
+- The crop includes margin around the rough bbox. The crop itself is NOT the
+  target. Return the target's true edges inside the crop and leave the visible
+  margin outside the bbox. If there is 10% margin on the left, x should be near
+  0.10, not 0.0.
+- First identify the exact target element named by the user. Do not lock onto
+  a nearby label, icon, neighboring row/card, or empty padding inside the crop.
 - Determine the four edges INDEPENDENTLY: find the target's left edge, top
   edge, right edge, bottom edge. Then x = left, y = top,
   width = right - left, height = bottom - top.
+- The bbox MUST be anchored on the target's visual edges. Do not return a
+  rectangle that is merely near the target, centered around it with extra
+  margin, shifted toward whitespace, or offset onto a neighbor.
 - For bordered elements (cards, panels, sections, rows): align to the
   visible border stroke. The bbox should sit on the existing border line —
   not inside the content area, not in the surrounding margin.
+- For table/list rows: include the entire row height from separator to
+  separator and the row's full horizontal extent inside the table/list, unless
+  the target is explicitly one cell or text span.
+- For tabs and buttons: include the clickable control bounds, including its
+  background/pill/border if visible. Do not box only the text unless the
+  request explicitly asks for text.
 - Include the full element — header / title bar, internal padding, footer.
 - Do not include surrounding empty space outside the element.
 - For text, links, headings, and placeholders: return the full visual line
   box, not only the glyph ink. Include underline/descenders and avoid a
   bbox that sits low or cuts through the text.
 - Sanity-check: the four corners of the bbox must land on the target's
-  corners."""
+  corners, not on the crop boundary or in crop margin.
+- Final overlay check before returning: imagine drawing the rectangle on the
+  crop. If the target would appear shifted outside the rectangle, or the
+  rectangle would float in whitespace beside the target, correct it. If you
+  cannot confidently correct it, return the best precise target-edge bbox; do
+  not return the whole crop."""
 
 
 _REFINE_RESPONSE_SCHEMA = {
@@ -302,38 +445,192 @@ def refine_bbox_call(
     crop_b64: str,
     target_description: str,
     model: str,
+    *,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> NormalizedBbox | None:
     """Ask the model for a tight bbox of ``target_description`` within a cropped image."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=get_api_key())
-    data_url = f"data:image/png;base64,{crop_b64}"
-
+    resolved_auth = resolve_auth_mode(auth)
+    resolved_effort = resolve_reasoning_effort(reasoning_effort)
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": REFINE_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"Target element: {target_description}"},
-                        {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
-                    ],
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "refined_bbox",
-                    "strict": True,
-                    "schema": _REFINE_RESPONSE_SCHEMA,
-                },
-            },
-        )
-        content = response.choices[0].message.content
-        if not content:
-            return None
-        return NormalizedBbox.model_validate_json(content)
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            tmp.write(base64.b64decode(crop_b64))
+            tmp.flush()
+            raw = _call_codex_json(
+                image_paths=[tmp.name],
+                system_prompt=REFINE_SYSTEM_PROMPT,
+                user_text=f"Target element: {target_description}",
+                model=model,
+                output_schema=_REFINE_RESPONSE_SCHEMA,
+                auth=resolved_auth,
+                api_key=api_key,
+                reasoning_effort=resolved_effort,
+            )
+        return NormalizedBbox.model_validate(raw)
     except Exception:
         return None
+
+
+_VALIDATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["accept", "improve"]},
+        "notes": {"type": "string"},
+        "improvement_prompt": {"type": "string"},
+    },
+    "required": ["decision", "notes", "improvement_prompt"],
+    "additionalProperties": False,
+}
+
+_COMPARISON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "choice": {"type": "string", "enum": ["first", "second"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["choice", "notes"],
+    "additionalProperties": False,
+}
+
+VALIDATOR_SYSTEM_PROMPT = """You are a strict QA validator for UI screenshot annotations.
+
+You receive the original screenshot and a rendered annotated image. The rendered
+image contains boxes, arrows, and labels drawn from model-generated bbox
+coordinates. Check whether the rendered annotations satisfy every requirement.
+
+Accept only when each requested target is correctly identified, the box covers
+the intended UI element, the box is not shifted onto a neighbor or whitespace,
+and the label/arrow do not make the result misleading.
+
+Reject any rendered candidate where a box floats beside the target, is offset
+into padding/blank space, covers only a nearby label instead of the requested
+control/container, includes an adjacent row/card, or misses the target's visible
+edge. In the improvement_prompt, name the specific request index and describe
+which edge should move and toward what visual boundary.
+
+If anything is wrong, return decision="improve" and write a concise
+improvement_prompt that can be passed to the marker on the next attempt. The
+prompt should describe the concrete visual fault and what to correct. Do not
+ask for renderer changes; focus on target identity and bbox placement.
+
+Return JSON only."""
+
+COMPARISON_SYSTEM_PROMPT = """You are a strict QA validator comparing two rendered annotation candidates.
+
+You receive the original screenshot, the first rendered candidate, and the
+second rendered candidate. Choose the candidate that better satisfies the
+annotation requirements. If both are imperfect, choose the less misleading one.
+
+Return JSON only."""
+
+
+def validate_rendered_candidate(
+    *,
+    original_image_path: str | Path,
+    rendered_image_path: str | Path,
+    queries: list[str],
+    annotations_json: str,
+    model: str,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    user_text = "\n".join(
+        [
+            "Images:",
+            "1. Original screenshot.",
+            "2. Rendered annotated candidate to validate.",
+            "",
+            "Annotation requirements:",
+            *_format_numbered_queries(queries),
+            "",
+            "Current annotation JSON:",
+            annotations_json,
+            "",
+            "Decide whether the rendered candidate should be accepted.",
+        ]
+    )
+    return _call_json_with_images(
+        image_paths=[original_image_path, rendered_image_path],
+        system_prompt=VALIDATOR_SYSTEM_PROMPT,
+        user_text=user_text,
+        model=model,
+        output_schema=_VALIDATION_SCHEMA,
+        auth=auth,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def choose_rendered_candidate(
+    *,
+    original_image_path: str | Path,
+    first_rendered_path: str | Path,
+    second_rendered_path: str | Path,
+    queries: list[str],
+    first_annotations_json: str,
+    second_annotations_json: str,
+    model: str,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    user_text = "\n".join(
+        [
+            "Images:",
+            "1. Original screenshot.",
+            "2. First rendered candidate.",
+            "3. Second rendered candidate.",
+            "",
+            "Annotation requirements:",
+            *_format_numbered_queries(queries),
+            "",
+            "First annotation JSON:",
+            first_annotations_json,
+            "",
+            "Second annotation JSON:",
+            second_annotations_json,
+            "",
+            "Choose the better rendered candidate.",
+        ]
+    )
+    return _call_json_with_images(
+        image_paths=[original_image_path, first_rendered_path, second_rendered_path],
+        system_prompt=COMPARISON_SYSTEM_PROMPT,
+        user_text=user_text,
+        model=model,
+        output_schema=_COMPARISON_SCHEMA,
+        auth=auth,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def _format_numbered_queries(queries: list[str]) -> list[str]:
+    return [f"[{i}] {query}" for i, query in enumerate(queries)]
+
+
+def _call_json_with_images(
+    *,
+    image_paths: list[str | Path],
+    system_prompt: str,
+    user_text: str,
+    model: str,
+    output_schema: dict[str, Any],
+    auth: str | None,
+    api_key: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    resolved_auth = resolve_auth_mode(auth)
+    resolved_effort = resolve_reasoning_effort(reasoning_effort)
+    return _call_codex_json(
+        image_paths=image_paths,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        model=model,
+        output_schema=output_schema,
+        auth=resolved_auth,
+        api_key=api_key,
+        reasoning_effort=resolved_effort,
+    )

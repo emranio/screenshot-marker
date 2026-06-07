@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the gray subtitle text that begins 'All of your API keys and credentials are stored here', label 'One home for all AI keys'",
-      "target_description": "gray subtitle text below the Connectors heading",
+      "target_description": "Gray subtitle text under the Connectors heading",
       "label_text": "One home for all AI keys",
       "bbox": {
-        "x": 147,
-        "y": 81,
-        "width": 734,
-        "height": 18
+        "x": 185,
+        "y": 85,
+        "width": 703,
+        "height": 13
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "red box with an arrow on the blue 'Install the AI plugin' button inside the pink banner near the top, label 'Install the AI plugin'",
-      "target_description": "blue Install the AI plugin button inside the pink banner near the top",
+      "target_description": "Blue Install the AI plugin button inside the pink banner near the top center",
       "label_text": "Install the AI plugin",
       "bbox": {
-        "x": 504,
-        "y": 224,
-        "width": 110,
-        "height": 20
+        "x": 507,
+        "y": 226,
+        "width": 162,
+        "height": 28
       },
       "color": null,
       "not_found": false,
@@ -34,13 +34,13 @@
     {
       "request_index": 2,
       "request_text": "draw a rectangle around the group of three provider rows titled 'Anthropic', 'Google', and 'OpenAI', each with an 'Install' button on the right, label 'Connect a provider'",
-      "target_description": "group of three provider rows for Anthropic, Google, and OpenAI with Install buttons",
+      "target_description": "Group containing the three bordered provider cards: Anthropic, Google, and OpenAI",
       "label_text": "Connect a provider",
       "bbox": {
-        "x": 480,
+        "x": 482,
         "y": 297,
-        "width": 631,
-        "height": 271
+        "width": 648,
+        "height": 276
       },
       "color": null,
       "not_found": false,

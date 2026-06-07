@@ -15,7 +15,13 @@ import sys
 from pathlib import Path
 
 from marker import annotate
-from marker.config import DEFAULT_COLOR, DEFAULT_MODEL
+from marker.config import (
+    AUTH_MODES,
+    DEFAULT_COLOR,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    REASONING_EFFORTS,
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,6 +47,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to a JSON array of query strings, or a saved annotation result JSON.",
     )
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Vision model (default: {DEFAULT_MODEL}).")
+    p.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        default=None,
+        help=(
+            "Reasoning effort for the Agents SDK Codex path. Defaults to "
+            f"$OPENAI_REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
+        ),
+    )
+    p.add_argument(
+        "--auth",
+        choices=AUTH_MODES,
+        default=None,
+        help="SDK auth mode. Defaults to $MARKER_AUTH or codex.",
+    )
     p.add_argument("--color", default=DEFAULT_COLOR, help=f"Default annotation color (default: {DEFAULT_COLOR}).")
     p.add_argument("--stroke", type=int, default=None, help="Stroke width in pixels (auto-scaled if omitted).")
     p.add_argument("--font", default=None, help="Path to a TrueType font file.")
@@ -53,6 +74,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-refine",
         action="store_true",
         help="Skip the per-bbox refinement pass (faster, less accurate).",
+    )
+    p.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate the rendered image and optionally rerun with validator feedback.",
+    )
+    p.add_argument(
+        "--validator-reruns",
+        type=int,
+        default=1,
+        help="Maximum validator-driven marker reruns when --validate is enabled.",
     )
     return p.parse_args(argv)
 
@@ -92,10 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         queries=queries,
         output_path=args.output,
         model=args.model,
+        auth=args.auth,
+        reasoning_effort=args.reasoning_effort,
         color=args.color,
         stroke_width=args.stroke,
         font_path=args.font,
         refine=not args.no_refine,
+        validate=args.validate,
+        validator_reruns=args.validator_reruns,
     )
 
     # Structured result on stdout (always JSON), human summary on stderr.

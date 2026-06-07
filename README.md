@@ -3,7 +3,7 @@
 A small Python tool that takes a UI screenshot plus one or more **plain-English
 annotation requests** and produces an annotated image: translucent red
 outlines, opaque arrows, and labelled callouts. A vision LLM (default:
-GPT‑5.4) handles spatial reasoning; Pillow handles the final rendering.
+GPT‑5.5) handles spatial reasoning; Pillow handles the final rendering.
 
 ```text
 tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
@@ -27,7 +27,8 @@ tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled
 
 ## Install
 
-Requires Python 3.10+ (3.13 recommended) and an OpenAI API key.
+Requires Python 3.10+ (3.13 recommended). By default, the tool uses your
+existing Codex subscription via local Codex auth, not an OpenAI API key.
 
 ```bash
 git clone <this repo>
@@ -36,18 +37,39 @@ python3.13 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Create a `.env` (or export environment variables):
+Sign in to Codex once, then select subscription auth:
+
+```bash
+codex login
+export MARKER_AUTH=codex
+unset OPENAI_API_KEY CODEX_API_KEY
+```
+
+Use the ChatGPT/Codex subscription login path in `codex login`. If you
+previously authenticated Codex with an API key, run `codex logout` and sign in
+again with ChatGPT before using `MARKER_AUTH=codex`.
+
+Optional `.env` values:
 
 ```env
 # .env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5.4          # optional; defaults to gpt-5.4
+MARKER_AUTH=codex
+OPENAI_MODEL=gpt-5.5
+OPENAI_REASONING_EFFORT=medium
 ```
 
 You can change `OPENAI_MODEL` any time — both the CLI and the Python API
-pick it up automatically. Useful values: `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-4o`, `gpt-4o-mini`. Heavier models are more accurate at locating
-small UI elements; mini models are cheaper and faster.
+pick it up automatically. `OPENAI_REASONING_EFFORT` is passed to the Agents SDK
+Codex extension and defaults to `medium`. Higher effort can improve difficult
+spatial reasoning, but it will be slower.
+
+If you prefer OpenAI Platform API-key billing, keep using the Agents SDK path
+and switch auth mode:
+
+```bash
+export MARKER_AUTH=api
+export CODEX_API_KEY=sk-...   # OPENAI_API_KEY also works
+```
 
 ---
 
@@ -88,11 +110,15 @@ $ jq '.annotations[0].bbox' result.json
 | `--output PATH` | `<image_dir>/<stem>_annotated.png` | Where to write the annotated PNG. Optional. |
 | `--query "..."` | — | A natural‑language annotation request. Repeatable. |
 | `--queries-file PATH` | — | A JSON array of query strings, or a saved annotation result JSON from `tests/annotations`. Combine with `--query` if you want. |
-| `--model NAME` | `$OPENAI_MODEL` or `gpt-5.4` | Override the vision model for this run. |
+| `--model NAME` | `$OPENAI_MODEL` or `gpt-5.5` | Override the vision model for this run. |
+| `--reasoning-effort minimal\|low\|medium\|high\|xhigh` | `$OPENAI_REASONING_EFFORT` or `medium` | Codex model reasoning effort. |
+| `--auth codex\|api` | `$MARKER_AUTH` or `codex` | `codex` uses local `codex login`; `api` passes `CODEX_API_KEY` / `OPENAI_API_KEY` through the Agents SDK. |
 | `--color HEX` | `#DC2626` | Default annotation color. |
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
 | `--font PATH` | system default | Path to a TrueType font file. |
 | `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
+| `--validate` | off | Ask a validator model to inspect the rendered output and rerun once with validator feedback if needed. Slower. |
+| `--validator-reruns N` | `1` | Maximum validator-driven marker reruns when `--validate` is enabled. |
 | `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
 
 ---
@@ -110,12 +136,16 @@ result = annotate(
         "rectangle around the payment timeline labeled 'Activity Log'",
     ],
     # all kwargs below are optional:
-    model="gpt-5.4",
+    model="gpt-5.5",
+    auth="codex",
+    reasoning_effort="medium",
     color="#DC2626",
     stroke_width=None,
     font_path=None,
     refine=True,
     refine_padding=0.15,
+    validate=False,
+    validator_reruns=1,
 )
 
 # AnnotationResult is a Pydantic model — JSON-shaped:
@@ -212,8 +242,8 @@ Tips:
 ```text
    image  ─┐
            ▼
-   ┌──── encode_image ────┐
-   │  base64 + dimensions │
+   ┌──── image_size ──────┐
+   │  dimensions only     │
    └──────────┬───────────┘
               ▼
    ┌──── call_vision (1 LLM call, all queries) ────┐
@@ -293,8 +323,9 @@ screenshot-marker/
 - **Low‑resolution screenshots** (under ~600px on the short edge) can lose
   precision because both passes process them at low detail. Upscale before
   feeding in if you need pixel‑perfect alignment.
-- **Mini models** (e.g. `gpt-5.4-mini`) work but are noticeably less
-  precise. They're good for batch jobs where coarse highlighting is fine.
+- Lower-capability or lower-effort settings are faster but can be noticeably
+  less precise. Use `gpt-5.5` with `medium` effort as the baseline for bbox
+  quality.
 - **Stroke width** is auto‑scaled with image size. Rectangle outlines render
   thinner than arrows/labels (`max(2.5, round(stroke × 0.45))`) so the box
   stays readable without overpowering the screenshot.

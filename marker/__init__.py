@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -9,9 +10,12 @@ from typing import Optional
 from PIL import Image
 
 from .config import (
+    AuthMode,
     DEFAULT_COLOR,
     DEFAULT_MODEL,
     auto_stroke_width,
+    resolve_auth_mode,
+    resolve_reasoning_effort,
     resolve_font_path,
 )
 from .drawing import render
@@ -21,7 +25,13 @@ from .models import (
     Bbox,
 )
 from .parser import parse_response
-from .vision import call_vision, encode_image, refine_bbox_call
+from .vision import (
+    call_vision,
+    choose_rendered_candidate,
+    image_size,
+    refine_bbox_call,
+    validate_rendered_candidate,
+)
 
 __all__ = [
     "annotate",
@@ -46,6 +56,11 @@ def annotate(
     font_path: Optional[str] = None,
     refine: bool = True,
     refine_padding: float = 0.15,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
+    validate: bool = False,
+    validator_reruns: int = 1,
 ) -> AnnotationResult:
     """Annotate ``image_path`` with one or more natural-language ``queries``.
 
@@ -67,17 +82,84 @@ def annotate(
     if not queries:
         raise ValueError("queries must contain at least one annotation request.")
 
+    resolved_auth = resolve_auth_mode(auth)
+    resolved_effort = resolve_reasoning_effort(reasoning_effort)
     image_path = Path(image_path)
     output_path = Path(output_path) if output_path is not None else _default_output_path(image_path)
 
-    image_b64, mime, width, height = encode_image(image_path)
-    raw = call_vision(image_b64, mime, width, height, queries, model)
+    if validate:
+        return _annotate_with_validation(
+            image_path=image_path,
+            queries=queries,
+            output_path=output_path,
+            model=model,
+            color=color,
+            stroke_width=stroke_width,
+            font_path=font_path,
+            refine=refine,
+            refine_padding=refine_padding,
+            auth=resolved_auth,
+            api_key=api_key,
+            reasoning_effort=resolved_effort,
+            validator_reruns=validator_reruns,
+        )
+
+    return _annotate_once(
+        image_path=image_path,
+        queries=queries,
+        output_path=output_path,
+        model=model,
+        color=color,
+        stroke_width=stroke_width,
+        font_path=font_path,
+        refine=refine,
+        refine_padding=refine_padding,
+        auth=resolved_auth,
+        api_key=api_key,
+        reasoning_effort=resolved_effort,
+    )
+
+
+def _annotate_once(
+    *,
+    image_path: Path,
+    queries: list[str],
+    output_path: Path,
+    model: str,
+    color: str,
+    stroke_width: Optional[int],
+    font_path: Optional[str],
+    refine: bool,
+    refine_padding: float,
+    auth: AuthMode,
+    api_key: str | None,
+    reasoning_effort: str,
+    validator_guidance: str | None = None,
+) -> AnnotationResult:
+    width, height = image_size(image_path)
+    raw = call_vision(
+        image_path,
+        width,
+        height,
+        queries,
+        model,
+        auth=auth,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+        validator_guidance=validator_guidance,
+    )
     annotations, unresolved = parse_response(raw, queries, width, height)
 
     if refine:
         with Image.open(image_path) as src:
             annotations = _refine_bboxes(
-                src, annotations, model=model, padding=refine_padding
+                src,
+                annotations,
+                model=model,
+                padding=refine_padding,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
             )
 
     stroke = stroke_width if stroke_width is not None else auto_stroke_width(width, height)
@@ -102,6 +184,124 @@ def annotate(
     )
 
 
+def _annotate_with_validation(
+    *,
+    image_path: Path,
+    queries: list[str],
+    output_path: Path,
+    model: str,
+    color: str,
+    stroke_width: Optional[int],
+    font_path: Optional[str],
+    refine: bool,
+    refine_padding: float,
+    auth: AuthMode,
+    api_key: str | None,
+    reasoning_effort: str,
+    validator_reruns: int,
+) -> AnnotationResult:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    max_reruns = max(0, validator_reruns)
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".{output_path.stem}-validator-",
+        dir=output_path.parent,
+    ) as tmpdir:
+        tmp_root = Path(tmpdir)
+        current_path = tmp_root / "candidate-1.png"
+        current = _annotate_once(
+            image_path=image_path,
+            queries=queries,
+            output_path=current_path,
+            model=model,
+            color=color,
+            stroke_width=stroke_width,
+            font_path=font_path,
+            refine=refine,
+            refine_padding=refine_padding,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+
+        for attempt in range(max_reruns + 1):
+            verdict = validate_rendered_candidate(
+                original_image_path=image_path,
+                rendered_image_path=current_path,
+                queries=queries,
+                annotations_json=_annotations_json(current),
+                model=model,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
+            )
+            if verdict.get("decision") == "accept":
+                return _promote_candidate(current, current_path, output_path)
+
+            if attempt >= max_reruns:
+                return _promote_candidate(current, current_path, output_path)
+
+            guidance = _validator_guidance(verdict)
+            next_path = tmp_root / f"candidate-{attempt + 2}.png"
+            next_result = _annotate_once(
+                image_path=image_path,
+                queries=queries,
+                output_path=next_path,
+                model=model,
+                color=color,
+                stroke_width=stroke_width,
+                font_path=font_path,
+                refine=refine,
+                refine_padding=refine_padding,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
+                validator_guidance=guidance,
+            )
+            choice = choose_rendered_candidate(
+                original_image_path=image_path,
+                first_rendered_path=current_path,
+                second_rendered_path=next_path,
+                queries=queries,
+                first_annotations_json=_annotations_json(current),
+                second_annotations_json=_annotations_json(next_result),
+                model=model,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
+            )
+            if choice.get("choice") == "first":
+                return _promote_candidate(current, current_path, output_path)
+
+            current = next_result
+            current_path = next_path
+            if attempt + 1 >= max_reruns:
+                return _promote_candidate(current, current_path, output_path)
+
+        return _promote_candidate(current, current_path, output_path)
+
+
+def _annotations_json(result: AnnotationResult) -> str:
+    return result.model_dump_json(indent=2)
+
+
+def _validator_guidance(verdict: dict[str, object]) -> str:
+    prompt = verdict.get("improvement_prompt")
+    if isinstance(prompt, str) and prompt.strip():
+        return prompt.strip()
+    notes = verdict.get("notes")
+    return notes.strip() if isinstance(notes, str) else "Improve bbox target placement."
+
+
+def _promote_candidate(
+    result: AnnotationResult,
+    candidate_path: Path,
+    output_path: Path,
+) -> AnnotationResult:
+    candidate_path.replace(output_path)
+    return result.model_copy(update={"output_path": output_path})
+
+
 def _crop_for_refine(
     image: Image.Image, bbox: Bbox, padding: float
 ) -> tuple[str, int, int, int, int]:
@@ -123,13 +323,23 @@ def _refine_one(
     *,
     model: str,
     padding: float,
+    auth: AuthMode,
+    api_key: str | None,
+    reasoning_effort: str,
 ) -> Annotation:
     if annotation.not_found or annotation.bbox is None:
         return annotation
 
     crop_b64, left, top, right, bottom = _crop_for_refine(image, annotation.bbox, padding)
     target = annotation.target_description or annotation.request_text
-    refined = refine_bbox_call(crop_b64, target, model)
+    refined = refine_bbox_call(
+        crop_b64,
+        target,
+        model,
+        auth=auth,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+    )
     if refined is None:
         return annotation
 
@@ -155,14 +365,26 @@ def _refine_bboxes(
     *,
     model: str,
     padding: float,
+    auth: AuthMode,
+    api_key: str | None,
+    reasoning_effort: str,
 ) -> list[Annotation]:
     if not annotations:
         return annotations
     rgb = image.convert("RGB")
-    with ThreadPoolExecutor(max_workers=min(8, len(annotations))) as pool:
+    max_workers = 2
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(annotations))) as pool:
         return list(
             pool.map(
-                lambda ann: _refine_one(rgb, ann, model=model, padding=padding),
+                lambda ann: _refine_one(
+                    rgb,
+                    ann,
+                    model=model,
+                    padding=padding,
+                    auth=auth,
+                    api_key=api_key,
+                    reasoning_effort=reasoning_effort,
+                ),
                 annotations,
             )
         )

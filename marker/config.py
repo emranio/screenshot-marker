@@ -3,9 +3,22 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional, cast
 
-_FALLBACK_MODEL = "gpt-5.4"
+_FALLBACK_MODEL = "gpt-5.5"
+_FALLBACK_AUTH_MODE = "codex"
+_FALLBACK_REASONING_EFFORT = "medium"
+
+AuthMode = Literal["codex", "api"]
+AUTH_MODES: tuple[AuthMode, ...] = ("codex", "api")
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 
 
 def load_env() -> None:
@@ -20,6 +33,8 @@ def load_env() -> None:
 load_env()
 
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", _FALLBACK_MODEL)
+DEFAULT_AUTH_MODE: AuthMode = "codex"
+DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium"
 DEFAULT_COLOR = "#DC2626"
 DEFAULT_FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -34,17 +49,46 @@ DEFAULT_FONT_CANDIDATES = [
 @dataclass
 class RenderDefaults:
     model: str = DEFAULT_MODEL
+    auth: AuthMode = DEFAULT_AUTH_MODE
+    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
     color: str = DEFAULT_COLOR
     stroke_width: Optional[int] = None
     font_path: Optional[str] = None
 
 
-def get_api_key() -> str:
+def resolve_auth_mode(auth: str | None = None) -> AuthMode:
     load_env()
-    key = os.environ.get("OPENAI_API_KEY")
+    value = auth if auth is not None else os.environ.get("MARKER_AUTH", _FALLBACK_AUTH_MODE)
+    normalized = value.strip().lower()
+    if normalized not in AUTH_MODES:
+        choices = ", ".join(AUTH_MODES)
+        raise ValueError(f"Unsupported auth mode {value!r}. Expected one of: {choices}.")
+    return cast(AuthMode, normalized)
+
+
+def resolve_reasoning_effort(effort: str | None = None) -> ReasoningEffort:
+    load_env()
+    value = (
+        effort
+        if effort is not None
+        else os.environ.get("OPENAI_REASONING_EFFORT", _FALLBACK_REASONING_EFFORT)
+    )
+    normalized = value.strip().lower()
+    if normalized not in REASONING_EFFORTS:
+        choices = ", ".join(REASONING_EFFORTS)
+        raise ValueError(
+            f"Unsupported reasoning effort {value!r}. Expected one of: {choices}."
+        )
+    return cast(ReasoningEffort, normalized)
+
+
+def get_codex_api_key(api_key: str | None = None) -> str:
+    load_env()
+    key = api_key or os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set. Add it to your environment or a .env file."
+            "API auth requires CODEX_API_KEY or OPENAI_API_KEY. "
+            "For subscription auth, use MARKER_AUTH=codex and run `codex login`."
         )
     return key
 
