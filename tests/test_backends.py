@@ -77,15 +77,12 @@ class AuthConfigTests(unittest.TestCase):
                 "api",
                 "--reasoning-effort",
                 "medium",
-                "--validate",
-                "--validator-reruns",
-                "2",
+                "--steps",
             ]
         )
         self.assertEqual(args.auth, "api")
         self.assertEqual(args.reasoning_effort, "medium")
-        self.assertTrue(args.validate)
-        self.assertEqual(args.validator_reruns, 2)
+        self.assertTrue(args.steps)
 
 
 class CodexSdkPathTests(unittest.TestCase):
@@ -247,70 +244,73 @@ class AnnotateAuthTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["auth"], "codex")
         self.assertEqual(call.call_args.kwargs["reasoning_effort"], "medium")
 
-    def test_validation_accepts_first_candidate_and_promotes_output(self) -> None:
+    def test_steps_accepts_first_candidate_and_promotes_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             image_path = Path(tmpdir) / "screen.png"
             output_path = Path(tmpdir) / "annotated.png"
             Image.new("RGB", (20, 20), "white").save(image_path)
 
             with patch("marker.call_vision", return_value=RAW_RESPONSE), patch(
-                "marker.validate_rendered_candidate",
+                "marker.run_annotation_step",
                 return_value={
                     "decision": "accept",
                     "notes": "",
-                    "improvement_prompt": "",
+                    "annotations": RAW_RESPONSE["annotations"],
                 },
-            ) as validate, patch("marker.choose_rendered_candidate") as choose:
+            ) as step:
                 result = marker.annotate(
                     image_path=image_path,
                     output_path=output_path,
                     queries=["box around main"],
                     refine=False,
                     auth="codex",
-                    validate=True,
+                    steps=True,
                 )
 
             self.assertEqual(result.output_path, output_path)
             self.assertTrue(output_path.is_file())
-            self.assertEqual(validate.call_count, 1)
-            self.assertEqual(choose.call_count, 0)
+            self.assertEqual(step.call_count, 1)
 
-    def test_validation_reruns_with_guidance_and_compares_candidates(self) -> None:
+    def test_steps_redraws_with_corrected_coordinates_without_marker_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             image_path = Path(tmpdir) / "screen.png"
             output_path = Path(tmpdir) / "annotated.png"
             Image.new("RGB", (20, 20), "white").save(image_path)
 
             with patch("marker.call_vision", return_value=RAW_RESPONSE) as call, patch(
-                "marker.validate_rendered_candidate",
+                "marker.run_annotation_step",
                 return_value={
-                    "decision": "improve",
-                    "notes": "box is too low",
-                    "improvement_prompt": "Move the bbox higher around the main panel.",
+                    "decision": "redraw",
+                    "notes": "box was too low",
+                    "annotations": [
+                        {
+                            "request_index": 0,
+                            "request_text": "box around main",
+                            "target_description": "main panel",
+                            "label_text": None,
+                            "bbox": {"x": 2, "y": 3, "width": 4, "height": 5},
+                            "color": None,
+                            "not_found": False,
+                            "notes": "corrected by step",
+                        }
+                    ],
                 },
-            ) as validate, patch(
-                "marker.choose_rendered_candidate",
-                return_value={"choice": "second", "notes": "better"},
-            ) as choose:
+            ) as step:
                 result = marker.annotate(
                     image_path=image_path,
                     output_path=output_path,
                     queries=["box around main"],
                     refine=False,
                     auth="codex",
-                    validate=True,
-                    validator_reruns=1,
+                    steps=True,
                 )
 
             self.assertEqual(result.output_path, output_path)
             self.assertTrue(output_path.is_file())
-            self.assertEqual(call.call_count, 2)
-            self.assertEqual(validate.call_count, 1)
-            self.assertIn(
-                "Move the bbox higher",
-                call.call_args.kwargs["validator_guidance"],
-            )
-            self.assertEqual(choose.call_count, 1)
+            self.assertEqual(call.call_count, 1)
+            self.assertEqual(step.call_count, 1)
+            self.assertEqual(result.annotations[0].bbox.x, 2)
+            self.assertEqual(result.annotations[0].bbox.y, 3)
 
 
 def _fake_codex_classes(captured: dict[str, object], final_response: str) -> tuple[type, type, type]:

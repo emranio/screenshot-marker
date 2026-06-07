@@ -8,9 +8,9 @@
       "label_text": "Customer Details",
       "bbox": {
         "x": 2641,
-        "y": 1867,
-        "width": 1952,
-        "height": 929
+        "y": 1866,
+        "width": 1951,
+        "height": 933
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the payment timeline labeled 'Activity Log'",
-      "target_description": "Payment Timeline panel in the lower left column",
+      "target_description": "Payment Timeline card in the lower left column",
       "label_text": "Activity Log",
       "bbox": {
-        "x": 630,
-        "y": 5568,
-        "width": 1953,
-        "height": 2110
+        "x": 632,
+        "y": 5555,
+        "width": 1948,
+        "height": 2033
       },
       "color": null,
       "not_found": false,

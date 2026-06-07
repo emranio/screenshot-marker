@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the bold text 'Current version: 7.0' and the 'Last checked' line just below it, label 'AI needs WordPress 7.0+'",
-      "target_description": "Current version heading and Last checked status line in the WordPress Updates content area",
+      "target_description": "Text block containing Current version: 7.0 and the Last checked line below it",
       "label_text": "AI needs WordPress 7.0+",
       "bbox": {
-        "x": 186,
-        "y": 185,
-        "width": 435,
-        "height": 38
+        "x": 182,
+        "y": 184,
+        "width": 379,
+        "height": 41
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the bold heading 'You have the latest version of WordPress.', label 'Fully updated'",
-      "target_description": "Bold heading stating the site has the latest WordPress version",
+      "target_description": "Bold heading stating You have the latest version of WordPress.",
       "label_text": "Fully updated",
       "bbox": {
         "x": 182,
         "y": 367,
-        "width": 363,
-        "height": 19
+        "width": 362,
+        "height": 22
       },
       "color": null,
       "not_found": false,

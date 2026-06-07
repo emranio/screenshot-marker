@@ -27,10 +27,9 @@ from .models import (
 from .parser import parse_response
 from .vision import (
     call_vision,
-    choose_rendered_candidate,
     image_size,
     refine_bbox_call,
-    validate_rendered_candidate,
+    run_annotation_step,
 )
 
 __all__ = [
@@ -59,8 +58,7 @@ def annotate(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
-    validate: bool = False,
-    validator_reruns: int = 1,
+    steps: bool = False,
 ) -> AnnotationResult:
     """Annotate ``image_path`` with one or more natural-language ``queries``.
 
@@ -87,8 +85,8 @@ def annotate(
     image_path = Path(image_path)
     output_path = Path(output_path) if output_path is not None else _default_output_path(image_path)
 
-    if validate:
-        return _annotate_with_validation(
+    if steps:
+        return _annotate_with_steps(
             image_path=image_path,
             queries=queries,
             output_path=output_path,
@@ -101,7 +99,6 @@ def annotate(
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
-            validator_reruns=validator_reruns,
         )
 
     return _annotate_once(
@@ -134,7 +131,6 @@ def _annotate_once(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
-    validator_guidance: str | None = None,
 ) -> AnnotationResult:
     width, height = image_size(image_path)
     raw = call_vision(
@@ -146,7 +142,6 @@ def _annotate_once(
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
-        validator_guidance=validator_guidance,
     )
     annotations, unresolved = parse_response(raw, queries, width, height)
 
@@ -184,7 +179,7 @@ def _annotate_once(
     )
 
 
-def _annotate_with_validation(
+def _annotate_with_steps(
     *,
     image_path: Path,
     queries: list[str],
@@ -198,21 +193,20 @@ def _annotate_with_validation(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
-    validator_reruns: int,
 ) -> AnnotationResult:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    max_reruns = max(0, validator_reruns)
+    width, height = image_size(image_path)
 
     with tempfile.TemporaryDirectory(
-        prefix=f".{output_path.stem}-validator-",
+        prefix=f".{output_path.stem}-steps-",
         dir=output_path.parent,
     ) as tmpdir:
         tmp_root = Path(tmpdir)
-        current_path = tmp_root / "candidate-1.png"
-        current = _annotate_once(
+        candidate_path = tmp_root / "candidate.png"
+        candidate = _annotate_once(
             image_path=image_path,
             queries=queries,
-            output_path=current_path,
+            output_path=candidate_path,
             model=model,
             color=color,
             stroke_width=stroke_width,
@@ -223,74 +217,34 @@ def _annotate_with_validation(
             api_key=api_key,
             reasoning_effort=reasoning_effort,
         )
+        step = run_annotation_step(
+            rendered_image_path=candidate_path,
+            queries=queries,
+            annotations_json=_annotations_json(candidate),
+            width=width,
+            height=height,
+            model=model,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+        if step.get("decision") == "accept":
+            return _promote_candidate(candidate, candidate_path, output_path)
 
-        for attempt in range(max_reruns + 1):
-            verdict = validate_rendered_candidate(
-                original_image_path=image_path,
-                rendered_image_path=current_path,
-                queries=queries,
-                annotations_json=_annotations_json(current),
-                model=model,
-                auth=auth,
-                api_key=api_key,
-                reasoning_effort=reasoning_effort,
-            )
-            if verdict.get("decision") == "accept":
-                return _promote_candidate(current, current_path, output_path)
-
-            if attempt >= max_reruns:
-                return _promote_candidate(current, current_path, output_path)
-
-            guidance = _validator_guidance(verdict)
-            next_path = tmp_root / f"candidate-{attempt + 2}.png"
-            next_result = _annotate_once(
-                image_path=image_path,
-                queries=queries,
-                output_path=next_path,
-                model=model,
-                color=color,
-                stroke_width=stroke_width,
-                font_path=font_path,
-                refine=refine,
-                refine_padding=refine_padding,
-                auth=auth,
-                api_key=api_key,
-                reasoning_effort=reasoning_effort,
-                validator_guidance=guidance,
-            )
-            choice = choose_rendered_candidate(
-                original_image_path=image_path,
-                first_rendered_path=current_path,
-                second_rendered_path=next_path,
-                queries=queries,
-                first_annotations_json=_annotations_json(current),
-                second_annotations_json=_annotations_json(next_result),
-                model=model,
-                auth=auth,
-                api_key=api_key,
-                reasoning_effort=reasoning_effort,
-            )
-            if choice.get("choice") == "first":
-                return _promote_candidate(current, current_path, output_path)
-
-            current = next_result
-            current_path = next_path
-            if attempt + 1 >= max_reruns:
-                return _promote_candidate(current, current_path, output_path)
-
-        return _promote_candidate(current, current_path, output_path)
+        corrected = _apply_step_annotations(candidate, step, width, height)
+        _render_result(
+            image_path=image_path,
+            output_path=output_path,
+            annotations=corrected.annotations,
+            color=color,
+            stroke_width=stroke_width,
+            font_path=font_path,
+        )
+        return corrected.model_copy(update={"output_path": output_path})
 
 
 def _annotations_json(result: AnnotationResult) -> str:
     return result.model_dump_json(indent=2)
-
-
-def _validator_guidance(verdict: dict[str, object]) -> str:
-    prompt = verdict.get("improvement_prompt")
-    if isinstance(prompt, str) and prompt.strip():
-        return prompt.strip()
-    notes = verdict.get("notes")
-    return notes.strip() if isinstance(notes, str) else "Improve bbox target placement."
 
 
 def _promote_candidate(
@@ -300,6 +254,76 @@ def _promote_candidate(
 ) -> AnnotationResult:
     candidate_path.replace(output_path)
     return result.model_copy(update={"output_path": output_path})
+
+
+def _render_result(
+    *,
+    image_path: Path,
+    output_path: Path,
+    annotations: list[Annotation],
+    color: str,
+    stroke_width: Optional[int],
+    font_path: Optional[str],
+) -> None:
+    width, height = image_size(image_path)
+    stroke = stroke_width if stroke_width is not None else auto_stroke_width(width, height)
+    font = resolve_font_path(font_path)
+    with Image.open(image_path) as src:
+        annotated = render(
+            src,
+            annotations,
+            default_color=color,
+            stroke_width=stroke,
+            font_path=font,
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    annotated.save(output_path, format="PNG")
+
+
+def _apply_step_annotations(
+    current: AnnotationResult,
+    step: dict[str, object],
+    width: int,
+    height: int,
+) -> AnnotationResult:
+    raw_annotations = step.get("annotations")
+    if not isinstance(raw_annotations, list):
+        return current
+
+    by_index: dict[int, Annotation] = {}
+    for raw in raw_annotations:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            ann = Annotation.model_validate(raw)
+        except Exception:
+            continue
+        if ann.not_found or ann.bbox is None:
+            by_index[ann.request_index] = ann.model_copy(update={"bbox": None, "not_found": True})
+            continue
+        by_index[ann.request_index] = ann.model_copy(
+            update={"bbox": _clamp_pixel_bbox(ann.bbox, width, height), "not_found": False}
+        )
+
+    annotations: list[Annotation] = []
+    unresolved: list[str] = []
+    for current_ann in current.annotations:
+        corrected = by_index.get(current_ann.request_index, current_ann)
+        if corrected.request_text != current_ann.request_text:
+            corrected = corrected.model_copy(update={"request_text": current_ann.request_text})
+        annotations.append(corrected)
+        if corrected.not_found:
+            unresolved.append(corrected.request_text)
+
+    return current.model_copy(update={"annotations": annotations, "unresolved": unresolved})
+
+
+def _clamp_pixel_bbox(bbox: Bbox, width: int, height: int) -> Bbox:
+    x = max(0, min(bbox.x, width - 1))
+    y = max(0, min(bbox.y, height - 1))
+    w = max(1, min(bbox.width, width - x))
+    h = max(1, min(bbox.height, height - y))
+    return Bbox(x=x, y=y, width=w, height=h)
 
 
 def _crop_for_refine(

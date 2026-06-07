@@ -76,15 +76,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip the per-bbox refinement pass (faster, less accurate).",
     )
     p.add_argument(
-        "--validate",
+        "--steps",
         action="store_true",
-        help="Validate the rendered image and optionally rerun with validator feedback.",
-    )
-    p.add_argument(
-        "--validator-reruns",
-        type=int,
-        default=1,
-        help="Maximum validator-driven marker reruns when --validate is enabled.",
+        help="Run the validator/correction step after the first render and redraw if needed.",
     )
     return p.parse_args(argv)
 
@@ -130,8 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         stroke_width=args.stroke,
         font_path=args.font,
         refine=not args.no_refine,
-        validate=args.validate,
-        validator_reruns=args.validator_reruns,
+        steps=args.steps,
     )
 
     # Structured result on stdout (always JSON), human summary on stderr.

@@ -117,8 +117,7 @@ $ jq '.annotations[0].bbox' result.json
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
 | `--font PATH` | system default | Path to a TrueType font file. |
 | `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
-| `--validate` | off | Ask a validator model to inspect the rendered output and rerun once with validator feedback if needed. Slower. |
-| `--validator-reruns N` | `1` | Maximum validator-driven marker reruns when `--validate` is enabled. |
+| `--steps` | off | After the first render, ask a validator/corrector step to inspect the drawn image plus full JSON. If needed, it returns corrected pixel bboxes and the renderer redraws once. Slower. |
 | `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
 
 ---
@@ -144,8 +143,7 @@ result = annotate(
     font_path=None,
     refine=True,
     refine_padding=0.15,
-    validate=False,
-    validator_reruns=1,
+    steps=False,
 )
 
 # AnnotationResult is a Pydantic model — JSON-shaped:

@@ -221,7 +221,7 @@ def _looks_like_tight_text_target(annotation: Annotation, stroke: int) -> bool:
 
 def _looks_like_tab_target(annotation: Annotation, stroke: int) -> bool:
     bbox = annotation.bbox
-    if bbox is None or bbox.height > max(58, stroke * 7):
+    if bbox is None or bbox.height > max(48, stroke * 5):
         return False
 
     words = _target_text(annotation).replace("-", " ").replace("_", " ").split()
@@ -281,14 +281,14 @@ def _fit_label(
     pad_y: int,
     draw: ImageDraw.ImageDraw,
     avoid_rects: list[tuple[float, float, float, float]] | None = None,
+    avoid_label_rects: list[tuple[float, float, float, float]] | None = None,
+    avoid_target_rects: list[tuple[float, float, float, float]] | None = None,
 ) -> dict:
     """Pick the best label layout: vertical side, horizontal alignment, font size, wrapping.
 
-    Tries (in order of preference):
-      vertical:   below if there's room, else above
-      horizontal: left-aligned to bbox, else right-aligned
-      font:       100% → 85% → 70% → 55% of base
-      lines:      1 → 2 → 3
+    Evaluates nearby label positions and scores them by collision, distance,
+    wrapping, and font shrinkage. This keeps labels from covering each other
+    when several targets sit in the same region.
     Returns a dict with font, lines, text_w, text_h, lx, ly, bg_rect, vertical, horizontal.
     """
     img_w, img_h = image_size
@@ -296,58 +296,107 @@ def _fit_label(
     space_above = bbox.y - gap - margin
 
     min_bg_h = MIN_FONT_SIZE + pad_y * 2
+    vertical_options: list[tuple[str, float]] = []
     if space_below >= min_bg_h:
-        vertical_options = ["below", "above"]
-    else:
-        vertical_options = ["above", "below"]
+        vertical_options.append(("below", 0))
+    if space_above >= min_bg_h:
+        vertical_options.append(("above", 8 if vertical_options else 0))
+    if not vertical_options:
+        vertical_options = [("below", 18), ("above", 24)]
 
-    horizontal_options = ["left", "right"]
     scales = (1.0, 0.85, 0.7, 0.55)
     line_options = (1, 2, 3)
     collision_pad = max(8, gap * 0.2)
-    best_colliding_layout: dict | None = None
-    best_collision_score: float | None = None
+    best_layout: dict | None = None
+    best_score: float | None = None
+
+    label_avoids = list(avoid_label_rects or [])
+    target_avoids = list(avoid_target_rects or [])
+    if avoid_rects:
+        target_avoids.extend(avoid_rects)
 
     def collision_score(rect: tuple[float, float, float, float]) -> float:
-        return sum(_rect_overlap_area(rect, avoid, collision_pad) for avoid in avoid_rects or [])
+        rect_area = max(1.0, (rect[2] - rect[0]) * (rect[3] - rect[1]))
+        label_overlap = sum(
+            _rect_overlap_area(rect, avoid, collision_pad)
+            for avoid in label_avoids
+        )
+        target_overlap = sum(
+            _rect_overlap_area(rect, avoid, collision_pad)
+            for avoid in target_avoids
+        )
+        target_overlap_ratio = min(1.0, target_overlap / rect_area)
+        return label_overlap * 1000 + target_overlap_ratio * 120
 
-    for vertical in vertical_options:
+    def candidate_positions(
+        vertical: str, bg_w: float, bg_h: float
+    ) -> list[tuple[str, float, float, float]]:
+        if vertical == "below":
+            bg_y0 = bbox.y + bbox.height + gap
+        else:
+            bg_y0 = bbox.y - bg_h - gap
+        bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
+
+        anchors = (
+            ("left", bbox.x, 0),
+            ("right", bbox.x + bbox.width - bg_w, 4),
+            ("center", bbox.x + (bbox.width - bg_w) / 2, 36),
+            ("image-left", margin, 320),
+            ("image-right", img_w - bg_w - margin, 320),
+        )
+        positions: list[tuple[str, float, float, float]] = []
+        seen: set[tuple[int, int]] = set()
+        for horizontal, raw_x, penalty in anchors:
+            bg_x0 = max(margin, min(raw_x, img_w - bg_w - margin))
+            key = (round(bg_x0), round(bg_y0))
+            if key in seen:
+                continue
+            seen.add(key)
+            positions.append((horizontal, bg_x0, bg_y0, penalty))
+        return positions
+
+    bbox_cx = bbox.x + bbox.width / 2
+    bbox_cy = bbox.y + bbox.height / 2
+
+    for vertical, vertical_penalty in vertical_options:
         max_bg_h = space_below if vertical == "below" else space_above
+        if max_bg_h < min_bg_h:
+            max_bg_h = img_h - 2 * margin
         max_text_h = max_bg_h - pad_y * 2
         if max_text_h < MIN_FONT_SIZE:
             continue
-        for horizontal in horizontal_options:
-            if horizontal == "left":
-                max_bg_w = img_w - bbox.x - margin
-            else:
-                max_bg_w = bbox.x + bbox.width - margin
-            max_text_w = max_bg_w - pad_x * 2
-            if max_text_w < 60:
-                continue
-            for scale in scales:
-                font_size = max(MIN_FONT_SIZE, int(base_font_size * scale))
-                font = _load_font(font_path, font_size)
-                for max_lines in line_options:
-                    fit = _wrap_text(text, font, max_text_w, max_lines, draw)
-                    if fit is None:
-                        continue
-                    lines, w, h = fit
-                    if not lines or h > max_text_h:
-                        continue
-                    bg_w = w + pad_x * 2
-                    bg_h = h + pad_y * 2
-                    if vertical == "below":
-                        bg_y0 = bbox.y + bbox.height + gap
-                    else:
-                        bg_y0 = bbox.y - bg_h - gap
-                    if horizontal == "left":
-                        bg_x0 = bbox.x
-                    else:
-                        bg_x0 = bbox.x + bbox.width - bg_w
-                    bg_x0 = max(margin, min(bg_x0, img_w - bg_w - margin))
-                    bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
+        max_bg_w = img_w - 2 * margin
+        max_text_w = max_bg_w - pad_x * 2
+        if max_text_w < 60:
+            continue
+        for scale_index, scale in enumerate(scales):
+            font_size = max(MIN_FONT_SIZE, int(base_font_size * scale))
+            font = _load_font(font_path, font_size)
+            for line_index, max_lines in enumerate(line_options):
+                fit = _wrap_text(text, font, max_text_w, max_lines, draw)
+                if fit is None:
+                    continue
+                lines, w, h = fit
+                if not lines or h > max_text_h:
+                    continue
+                bg_w = w + pad_x * 2
+                bg_h = h + pad_y * 2
+                for horizontal, bg_x0, bg_y0, horizontal_penalty in candidate_positions(vertical, bg_w, bg_h):
                     lx = bg_x0 + pad_x
                     ly = bg_y0 + pad_y
+                    bg_rect = (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h)
+                    label_cx = bg_x0 + bg_w / 2
+                    label_cy = bg_y0 + bg_h / 2
+                    distance = math.hypot(label_cx - bbox_cx, label_cy - bbox_cy)
+                    collisions = collision_score(bg_rect)
+                    score = (
+                        collisions
+                        + vertical_penalty
+                        + horizontal_penalty
+                        + scale_index * 12
+                        + line_index * 6
+                        + distance * 0.25
+                    )
                     layout = {
                         "font": font,
                         "lines": lines,
@@ -355,19 +404,16 @@ def _fit_label(
                         "text_h": h,
                         "lx": lx,
                         "ly": ly,
-                        "bg_rect": (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h),
+                        "bg_rect": bg_rect,
                         "vertical": vertical,
                         "horizontal": horizontal,
                     }
-                    score = collision_score(layout["bg_rect"])
-                    if score <= 0:
-                        return layout
-                    if best_collision_score is None or score < best_collision_score:
-                        best_collision_score = score
-                        best_colliding_layout = layout
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_layout = layout
 
-    if best_colliding_layout is not None:
-        return best_colliding_layout
+    if best_layout is not None:
+        return best_layout
 
     # Final fallback: smallest font, force-fit single block, BL preferred.
     font = _load_font(font_path, MIN_FONT_SIZE)
@@ -693,47 +739,66 @@ def render(
         color_rgb = _parse_color(ann.color, fallback=default_rgb)
         render_items.append({"annotation": ann, "bbox": render_bbox, "color_rgb": color_rgb})
 
-    layouts: list[Optional[dict]] = []
-    for index, item in enumerate(render_items):
+    for item in render_items:
         if item is None:
-            layouts.append(None)
+            continue
+        render_bbox: Bbox = item["bbox"]
+        color_rgb: tuple[int, int, int] = item["color_rgb"]
+        _draw_translucent_rectangle(overlay, render_bbox, color_rgb, rectangle_stroke)
+
+    layouts: list[Optional[dict]] = [None] * len(render_items)
+    label_indices = [
+        index
+        for index, item in enumerate(render_items)
+        if item is not None and item["annotation"].label_text and item["annotation"].label_text.strip()
+    ]
+    label_indices.sort(
+        key=lambda index: (
+            render_items[index]["bbox"].y,
+            render_items[index]["bbox"].x,
+            render_items[index]["bbox"].width * render_items[index]["bbox"].height,
+            index,
+        )
+    )
+
+    for index in label_indices:
+        item = render_items[index]
+        if item is None:
             continue
 
         ann: Annotation = item["annotation"]
         render_bbox: Bbox = item["bbox"]
         color_rgb: tuple[int, int, int] = item["color_rgb"]
-        _draw_translucent_rectangle(overlay, render_bbox, color_rgb, rectangle_stroke)
+        avoid_target_rects = [
+            _bbox_rect(other["bbox"])
+            for other_index, other in enumerate(render_items)
+            if other is not None and other_index != index
+        ]
+        avoid_label_rects = [
+            layout["bg_rect"] for layout in layouts if layout is not None
+        ]
+        layout = _fit_label(
+            render_bbox,
+            ann.label_text.strip(),
+            (img_w, img_h),
+            base_font_size,
+            font_path,
+            gap,
+            margin,
+            label_pad_x,
+            label_pad_y,
+            measure_draw,
+            avoid_label_rects=avoid_label_rects,
+            avoid_target_rects=avoid_target_rects,
+        )
+        layout["color_rgb"] = color_rgb
+        layouts[index] = layout
 
-        if ann.label_text and ann.label_text.strip():
-            avoid_rects = [
-                _bbox_rect(other["bbox"])
-                for other_index, other in enumerate(render_items)
-                if other is not None and other_index != index
-            ]
-            avoid_rects.extend(layout["bg_rect"] for layout in layouts if layout is not None)
-            layout = _fit_label(
-                render_bbox,
-                ann.label_text.strip(),
-                (img_w, img_h),
-                base_font_size,
-                font_path,
-                gap,
-                margin,
-                label_pad_x,
-                label_pad_y,
-                measure_draw,
-                avoid_rects,
-            )
-            layout["color_rgb"] = color_rgb
-            layouts.append(layout)
-
-            label_rect = (
-                *layout["bg_rect"],
-            )
-            arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
-            _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
-        else:
-            layouts.append(None)
+        label_rect = (
+            *layout["bg_rect"],
+        )
+        arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
+        _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
 
     canvas = Image.alpha_composite(canvas, overlay)
 

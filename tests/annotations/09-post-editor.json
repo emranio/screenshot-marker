@@ -9,8 +9,8 @@
       "bbox": {
         "x": 80,
         "y": 16,
-        "width": 31,
-        "height": 31
+        "width": 32,
+        "height": 32
       },
       "color": null,
       "not_found": false,
@@ -19,12 +19,12 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the center top command bar showing 'No title' and the 'Cmd K' shortcut, label 'Press Cmd+K, type AI'",
-      "target_description": "Center top command bar containing 'No title · Post' and the Cmd K shortcut",
+      "target_description": "Centered top command bar showing No title · Post and Cmd K shortcut",
       "label_text": "Press Cmd+K, type AI",
       "bbox": {
-        "x": 495,
-        "y": 16,
-        "width": 450,
+        "x": 496,
+        "y": 17,
+        "width": 464,
         "height": 32
       },
       "color": null,
@@ -34,13 +34,13 @@
     {
       "request_index": 2,
       "request_text": "rectangle around the placeholder text 'Type / to choose a block' below the title, label 'Or type /ai'",
-      "target_description": "Placeholder text 'Type / to choose a block' below the title field",
+      "target_description": "Placeholder text below the Add title heading reading Type / to choose a block",
       "label_text": "Or type /ai",
       "bbox": {
-        "x": 260,
-        "y": 216,
-        "width": 213,
-        "height": 24
+        "x": 257,
+        "y": 209,
+        "width": 274,
+        "height": 30
       },
       "color": null,
       "not_found": false,

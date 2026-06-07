@@ -4,13 +4,13 @@
     {
       "request_index": 0,
       "request_text": "rectangle with an arrow on the 'Upload Plugin' button next to the 'Add Plugins' page title, label 'Upload an AI plugin zip'",
-      "target_description": "Upload Plugin button beside the Add Plugins page title",
+      "target_description": "Upload Plugin button next to the Add Plugins page title",
       "label_text": "Upload an AI plugin zip",
       "bbox": {
         "x": 309,
         "y": 50,
-        "width": 112,
-        "height": 32
+        "width": 113,
+        "height": 33
       },
       "color": null,
       "not_found": false,
@@ -19,12 +19,12 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the 'Search plugins' input box in the top right, label 'Or search: AI'",
-      "target_description": "Search Plugins text input in the top right filter bar",
+      "target_description": "Search Plugins text input box in the top right of the plugin browser toolbar",
       "label_text": "Or search: AI",
       "bbox": {
         "x": 1030,
-        "y": 139,
-        "width": 279,
+        "y": 143,
+        "width": 282,
         "height": 37
       },
       "color": null,
@@ -34,17 +34,17 @@
     {
       "request_index": 2,
       "request_text": "draw a rectangle around the whole plugin card in the right column of the second row, titled 'Vereal AI Gateway Provider' with 'By Vereal' beneath it and an 'Install Now' button, label 'Example: AI provider'",
-      "target_description": "Right-column second-row plugin card for Vercel AI Gateway Provider with Install Now button",
+      "target_description": "Right-column second-row plugin card titled Vercel AI Gateway Provider with Install Now button",
       "label_text": "Example: AI provider",
       "bbox": {
-        "x": 812,
-        "y": 500,
-        "width": 627,
-        "height": 253
+        "x": 809,
+        "y": 499,
+        "width": 611,
+        "height": 254
       },
       "color": null,
       "not_found": false,
-      "notes": "visible card text reads 'Vercel AI Gateway Provider' and 'By Vercel'"
+      "notes": ""
     }
   ],
   "unresolved": []

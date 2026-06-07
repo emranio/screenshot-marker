@@ -56,6 +56,43 @@ _ANNOTATION_SCHEMA = {
     "additionalProperties": False,
 }
 
+_PIXEL_BBOX_SCHEMA = {
+    "type": ["object", "null"],
+    "properties": {
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+    },
+    "required": ["x", "y", "width", "height"],
+    "additionalProperties": False,
+}
+
+_PIXEL_ANNOTATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "request_index": {"type": "integer"},
+        "request_text": {"type": "string"},
+        "target_description": {"type": "string"},
+        "label_text": {"type": ["string", "null"]},
+        "bbox": _PIXEL_BBOX_SCHEMA,
+        "color": {"type": ["string", "null"]},
+        "not_found": {"type": "boolean"},
+        "notes": {"type": "string"},
+    },
+    "required": [
+        "request_index",
+        "request_text",
+        "target_description",
+        "label_text",
+        "bbox",
+        "color",
+        "not_found",
+        "notes",
+    ],
+    "additionalProperties": False,
+}
+
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -197,8 +234,6 @@ def build_user_prompt(
     queries: list[str],
     width: int,
     height: int,
-    *,
-    validator_guidance: str | None = None,
 ) -> str:
     lines = [
         f"Image dimensions: {width}px wide x {height}px tall.",
@@ -213,17 +248,6 @@ def build_user_prompt(
         "Return one annotation object per request, with request_index matching "
         "the bracketed number above and request_text echoing the request verbatim."
     )
-    if validator_guidance:
-        lines.extend(
-            [
-                "",
-                "Additional validator feedback from a previous rendered attempt:",
-                validator_guidance,
-                "",
-                "Use the validator feedback to improve bbox placement, but keep "
-                "request_text equal to the original request line for each item.",
-            ]
-        )
     return "\n".join(lines)
 
 
@@ -237,7 +261,6 @@ def call_vision(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
-    validator_guidance: str | None = None,
 ) -> dict[str, Any]:
     resolved_auth = resolve_auth_mode(auth)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
@@ -245,7 +268,6 @@ def call_vision(
         queries,
         width,
         height,
-        validator_guidance=validator_guidance,
     )
     return _call_codex_json(
         image_paths=[image_path],
@@ -472,65 +494,72 @@ def refine_bbox_call(
         return None
 
 
-_VALIDATION_SCHEMA = {
+_STEP_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "decision": {"type": "string", "enum": ["accept", "improve"]},
+        "decision": {"type": "string", "enum": ["accept", "redraw"]},
         "notes": {"type": "string"},
-        "improvement_prompt": {"type": "string"},
+        "annotations": {
+            "type": "array",
+            "items": _PIXEL_ANNOTATION_SCHEMA,
+        },
     },
-    "required": ["decision", "notes", "improvement_prompt"],
+    "required": ["decision", "notes", "annotations"],
     "additionalProperties": False,
 }
 
-_COMPARISON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "choice": {"type": "string", "enum": ["first", "second"]},
-        "notes": {"type": "string"},
-    },
-    "required": ["choice", "notes"],
-    "additionalProperties": False,
-}
+STEP_SYSTEM_PROMPT = """You are a strict QA/correction step for UI screenshot annotations.
 
-VALIDATOR_SYSTEM_PROMPT = """You are a strict QA validator for UI screenshot annotations.
+You receive one rendered annotated screenshot and the full current annotation
+JSON. The rendered image contains the original screenshot plus boxes, arrows,
+and labels drawn from the JSON's absolute pixel bbox coordinates.
 
-You receive the original screenshot and a rendered annotated image. The rendered
-image contains boxes, arrows, and labels drawn from model-generated bbox
-coordinates. Check whether the rendered annotations satisfy every requirement.
+Your job is not to write feedback for another marker pass. Your job is to
+decide whether the current JSON can be accepted or to directly correct the
+bbox coordinates yourself so the renderer can redraw the image immediately.
 
-Accept only when each requested target is correctly identified, the box covers
-the intended UI element, the box is not shifted onto a neighbor or whitespace,
-and the label/arrow do not make the result misleading.
+Return JSON only.
 
-Reject any rendered candidate where a box floats beside the target, is offset
-into padding/blank space, covers only a nearby label instead of the requested
-control/container, includes an adjacent row/card, or misses the target's visible
-edge. In the improvement_prompt, name the specific request index and describe
-which edge should move and toward what visual boundary.
+Decision rules:
 
-If anything is wrong, return decision="improve" and write a concise
-improvement_prompt that can be passed to the marker on the next attempt. The
-prompt should describe the concrete visual fault and what to correct. Do not
-ask for renderer changes; focus on target identity and bbox placement.
+- Return decision="accept" only when every requested target is correctly
+  identified and each bbox is anchored to the target's visual edges.
+- Return decision="redraw" when any bbox is shifted, floating in whitespace,
+  attached to a nearby label instead of the requested target, missing an edge,
+  too tight, too loose, or covering a neighboring row/card/control.
+- If a label/arrow overlaps another label because the renderer placed it badly
+  but the bbox coordinates are correct, keep the bbox unchanged; renderer layout
+  is fixed separately.
 
-Return JSON only."""
+Annotation correction rules:
 
-COMPARISON_SYSTEM_PROMPT = """You are a strict QA validator comparing two rendered annotation candidates.
+- Always return a full annotations array, in the same order as the input JSON.
+- Preserve request_index, request_text, label_text, color, and target_description
+  unless the current value is plainly inconsistent with the visible target.
+- Coordinates are ABSOLUTE PIXEL integers in the original screenshot coordinate
+  system, not normalized floats.
+- bbox is {x, y, width, height}. x/y are top-left. width/height are positive.
+- Clamp all coordinates inside the image dimensions supplied in the prompt.
+- For bordered elements, align to the visible border stroke.
+- For rows/lists, include the whole row from separator to separator and the full
+  row width inside the list/table unless the request asks for a cell or text.
+- For buttons/tabs, include the clickable control bounds, not only text.
+- For plain text targets, include the full visual text line box with natural
+  line-height, not only glyph ink.
+- If a requested target is missing or ambiguous, set not_found=true and bbox=null.
 
-You receive the original screenshot, the first rendered candidate, and the
-second rendered candidate. Choose the candidate that better satisfies the
-annotation requirements. If both are imperfect, choose the less misleading one.
-
-Return JSON only."""
+Final check: imagine redrawing from your returned JSON. If the rectangle would
+still visibly miss the requested target edge or sit in whitespace, correct it
+before returning."""
 
 
-def validate_rendered_candidate(
+def run_annotation_step(
     *,
-    original_image_path: str | Path,
     rendered_image_path: str | Path,
     queries: list[str],
     annotations_json: str,
+    width: int,
+    height: int,
     model: str,
     auth: str | None = None,
     api_key: str | None = None,
@@ -539,8 +568,9 @@ def validate_rendered_candidate(
     user_text = "\n".join(
         [
             "Images:",
-            "1. Original screenshot.",
-            "2. Rendered annotated candidate to validate.",
+            "1. Rendered annotated screenshot to validate/correct.",
+            "",
+            f"Image dimensions: {width}px wide x {height}px tall.",
             "",
             "Annotation requirements:",
             *_format_numbered_queries(queries),
@@ -548,59 +578,16 @@ def validate_rendered_candidate(
             "Current annotation JSON:",
             annotations_json,
             "",
-            "Decide whether the rendered candidate should be accepted.",
+            "Return decision='accept' with the current annotations if the image is correct. "
+            "Otherwise return decision='redraw' with corrected absolute-pixel annotations.",
         ]
     )
     return _call_json_with_images(
-        image_paths=[original_image_path, rendered_image_path],
-        system_prompt=VALIDATOR_SYSTEM_PROMPT,
+        image_paths=[rendered_image_path],
+        system_prompt=STEP_SYSTEM_PROMPT,
         user_text=user_text,
         model=model,
-        output_schema=_VALIDATION_SCHEMA,
-        auth=auth,
-        api_key=api_key,
-        reasoning_effort=reasoning_effort,
-    )
-
-
-def choose_rendered_candidate(
-    *,
-    original_image_path: str | Path,
-    first_rendered_path: str | Path,
-    second_rendered_path: str | Path,
-    queries: list[str],
-    first_annotations_json: str,
-    second_annotations_json: str,
-    model: str,
-    auth: str | None = None,
-    api_key: str | None = None,
-    reasoning_effort: str | None = None,
-) -> dict[str, Any]:
-    user_text = "\n".join(
-        [
-            "Images:",
-            "1. Original screenshot.",
-            "2. First rendered candidate.",
-            "3. Second rendered candidate.",
-            "",
-            "Annotation requirements:",
-            *_format_numbered_queries(queries),
-            "",
-            "First annotation JSON:",
-            first_annotations_json,
-            "",
-            "Second annotation JSON:",
-            second_annotations_json,
-            "",
-            "Choose the better rendered candidate.",
-        ]
-    )
-    return _call_json_with_images(
-        image_paths=[original_image_path, first_rendered_path, second_rendered_path],
-        system_prompt=COMPARISON_SYSTEM_PROMPT,
-        user_text=user_text,
-        model=model,
-        output_schema=_COMPARISON_SCHEMA,
+        output_schema=_STEP_RESPONSE_SCHEMA,
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,

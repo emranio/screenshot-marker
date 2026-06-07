@@ -9,8 +9,8 @@
       "bbox": {
         "x": 521,
         "y": 154,
-        "width": 405,
-        "height": 60
+        "width": 408,
+        "height": 57
       },
       "color": null,
       "not_found": false,
@@ -19,13 +19,13 @@
     {
       "request_index": 1,
       "request_text": "draw a rectangle around the list of command results shown below the search box inside the popup, label 'Pick a command, hit Enter'",
-      "target_description": "Command results list inside the command palette popup below the search input",
+      "target_description": "Command results list area below the search input inside the command palette popup",
       "label_text": "Pick a command, hit Enter",
       "bbox": {
-        "x": 527,
-        "y": 221,
-        "width": 385,
-        "height": 370
+        "x": 520,
+        "y": 210,
+        "width": 400,
+        "height": 368
       },
       "color": null,
       "not_found": false,

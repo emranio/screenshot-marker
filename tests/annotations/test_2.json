@@ -4,32 +4,32 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the 'Site restructure' row labeled 'Latest annotation'",
-      "target_description": "First annotation list row titled Site restructure, spanning the bordered table area from the top separator to the next row separator",
+      "target_description": "First annotation list row titled 'Site restructure'",
       "label_text": "Latest annotation",
       "bbox": {
-        "x": 33,
+        "x": 31,
         "y": 227,
-        "width": 2506,
-        "height": 255
+        "width": 2497,
+        "height": 270
       },
       "color": null,
       "not_found": false,
-      "notes": ""
+      "notes": "Expanded to include the full first row from its top edge through the separator below the row."
     },
     {
       "request_index": 1,
       "request_text": "rectangle around the Annotations tab labeled 'Active tab'",
-      "target_description": "Active Annotations navigation tab including its text and underline only",
+      "target_description": "Top navigation Annotations tab",
       "label_text": "Active tab",
       "bbox": {
-        "x": 204,
-        "y": 128,
+        "x": 201,
+        "y": 104,
         "width": 186,
-        "height": 53
+        "height": 76
       },
       "color": null,
       "not_found": false,
-      "notes": ""
+      "notes": "Expanded from the text-only box to the full tab control including padding and active underline."
     }
   ],
   "unresolved": []
