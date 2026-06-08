@@ -21,6 +21,8 @@ class RawAnnotation(BaseModel):
     target_description: str
     label_text: Optional[str] = None
     bbox: Optional[NormalizedBbox] = None
+    label_position: Optional[NormalizedBbox] = None
+    show_arrow: Optional[bool] = None
     color: Optional[str] = None
     not_found: bool = False
     notes: str = ""
@@ -45,6 +47,8 @@ class Annotation(BaseModel):
     target_description: str
     label_text: Optional[str] = None
     bbox: Optional[Bbox] = None
+    label_position: Optional[Bbox] = None
+    show_arrow: Optional[bool] = None
     color: Optional[str] = None
     not_found: bool = False
     notes: str = ""

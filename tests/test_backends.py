@@ -11,7 +11,10 @@ from PIL import Image
 
 import annotate as cli
 import marker
+from marker import drawing
 from marker import config, vision
+from marker.models import Bbox
+from marker.parser import parse_response
 
 
 RAW_RESPONSE = {
@@ -83,6 +86,79 @@ class AuthConfigTests(unittest.TestCase):
         self.assertEqual(args.auth, "api")
         self.assertEqual(args.reasoning_effort, "medium")
         self.assertTrue(args.steps)
+
+
+class AnnotationContractTests(unittest.TestCase):
+    def test_parse_response_converts_label_position_and_arrow_flag(self) -> None:
+        raw = {
+            "annotations": [
+                {
+                    "request_index": 0,
+                    "request_text": "box around main, label 'Main'",
+                    "target_description": "main panel",
+                    "label_text": "Main",
+                    "bbox": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+                    "label_position": {
+                        "x": 0.5,
+                        "y": 0.7,
+                        "width": 0.2,
+                        "height": 0.1,
+                    },
+                    "show_arrow": False,
+                    "color": None,
+                    "not_found": False,
+                    "notes": "",
+                }
+            ]
+        }
+
+        annotations, unresolved = parse_response(
+            raw,
+            ["box around main, label 'Main'"],
+            200,
+            100,
+        )
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(annotations[0].bbox, Bbox(x=20, y=20, width=60, height=40))
+        self.assertEqual(
+            annotations[0].label_position,
+            Bbox(x=100, y=70, width=40, height=10),
+        )
+        self.assertIs(annotations[0].show_arrow, False)
+
+    def test_close_labels_do_not_draw_arrows_even_when_requested(self) -> None:
+        bbox = Bbox(x=50, y=50, width=80, height=30)
+        close_label = (52.0, 86.0, 150.0, 116.0)
+        far_label = (10.0, 170.0, 108.0, 200.0)
+
+        self.assertFalse(drawing._should_draw_arrow(close_label, bbox, None, 4))
+        self.assertFalse(drawing._should_draw_arrow(close_label, bbox, True, 4))
+        self.assertTrue(drawing._should_draw_arrow(far_label, bbox, None, 4))
+        self.assertFalse(drawing._should_draw_arrow(far_label, bbox, False, 4))
+
+    def test_render_accepts_model_label_position(self) -> None:
+        image = Image.new("RGB", (240, 160), "white")
+        annotation = marker.Annotation(
+            request_index=0,
+            request_text="box around main, label 'Main'",
+            target_description="main panel",
+            label_text="Main",
+            bbox=Bbox(x=40, y=40, width=80, height=40),
+            label_position=Bbox(x=42, y=92, width=96, height=36),
+            show_arrow=False,
+        )
+
+        rendered = drawing.render(
+            image,
+            [annotation],
+            default_color="#DC2626",
+            stroke_width=4,
+            font_path=None,
+        )
+
+        self.assertEqual(rendered.size, image.size)
+        self.assertEqual(rendered.mode, "RGB")
 
 
 class CodexSdkPathTests(unittest.TestCase):

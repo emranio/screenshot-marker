@@ -63,7 +63,7 @@ def annotate(
     """Annotate ``image_path`` with one or more natural-language ``queries``.
 
     A single vision-model call resolves all queries; the resulting rectangles,
-    arrows, and labels are drawn onto the image and saved as PNG.
+    optional arrows, and labels are drawn onto the image and saved as PNG.
 
     If ``output_path`` is not provided, the result is written next to the
     input as ``<image_stem>_annotated.png``.
@@ -299,11 +299,14 @@ def _apply_step_annotations(
         except Exception:
             continue
         if ann.not_found or ann.bbox is None:
-            by_index[ann.request_index] = ann.model_copy(update={"bbox": None, "not_found": True})
+            by_index[ann.request_index] = ann.model_copy(
+                update={"bbox": None, "label_position": None, "not_found": True}
+            )
             continue
-        by_index[ann.request_index] = ann.model_copy(
-            update={"bbox": _clamp_pixel_bbox(ann.bbox, width, height), "not_found": False}
-        )
+        update = {"bbox": _clamp_pixel_bbox(ann.bbox, width, height), "not_found": False}
+        if ann.label_position is not None:
+            update["label_position"] = _clamp_pixel_bbox(ann.label_position, width, height)
+        by_index[ann.request_index] = ann.model_copy(update=update)
 
     annotations: list[Annotation] = []
     unresolved: list[str] = []

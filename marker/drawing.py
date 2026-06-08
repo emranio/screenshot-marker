@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from .models import Annotation, Bbox
 
@@ -447,6 +447,93 @@ def _fit_label(
     }
 
 
+def _fit_label_at_position(
+    label_position: Bbox,
+    text: str,
+    image_size: tuple[int, int],
+    base_font_size: int,
+    font_path: Optional[str],
+    margin: int,
+    pad_x: int,
+    pad_y: int,
+    draw: ImageDraw.ImageDraw,
+) -> dict | None:
+    """Fit a label near a model-provided preferred rectangle."""
+    img_w, img_h = image_size
+    if label_position.width <= 0 or label_position.height <= 0:
+        return None
+
+    max_image_bg_w = max(1, img_w - 2 * margin)
+    max_image_bg_h = max(1, img_h - 2 * margin)
+    preferred_w = max(1, min(label_position.width, max_image_bg_w))
+    preferred_h = max(1, min(label_position.height, max_image_bg_h))
+
+    limit_options = (
+        (preferred_w, preferred_h, 0),
+        (
+            max(preferred_w, min(max_image_bg_w, round(preferred_w * 1.5))),
+            max(preferred_h, min(max_image_bg_h, round(preferred_h * 1.5))),
+            45,
+        ),
+        (max_image_bg_w, max_image_bg_h, 120),
+    )
+    scales = (1.0, 0.85, 0.7, 0.55)
+    line_options = (1, 2, 3, 4)
+    best_layout: dict | None = None
+    best_score: float | None = None
+
+    for limit_w, limit_h, expansion_penalty in limit_options:
+        max_text_w = limit_w - pad_x * 2
+        max_text_h = limit_h - pad_y * 2
+        if max_text_w < 60 or max_text_h < MIN_FONT_SIZE:
+            continue
+        for scale_index, scale in enumerate(scales):
+            font_size = max(MIN_FONT_SIZE, int(base_font_size * scale))
+            font = _load_font(font_path, font_size)
+            for line_index, max_lines in enumerate(line_options):
+                fit = _wrap_text(text, font, max_text_w, max_lines, draw)
+                if fit is None:
+                    continue
+                lines, w, h = fit
+                if not lines or h > max_text_h:
+                    continue
+
+                bg_w = min(limit_w, w + pad_x * 2)
+                bg_h = min(limit_h, h + pad_y * 2)
+                bg_x0 = label_position.x
+                bg_y0 = label_position.y
+                bg_x0 = max(margin, min(bg_x0, img_w - bg_w - margin))
+                bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
+                lx = bg_x0 + pad_x
+                ly = bg_y0 + pad_y
+                position_drift = math.hypot(
+                    bg_x0 - label_position.x,
+                    bg_y0 - label_position.y,
+                )
+                score = (
+                    expansion_penalty
+                    + scale_index * 12
+                    + line_index * 6
+                    + position_drift * 0.2
+                )
+                layout = {
+                    "font": font,
+                    "lines": lines,
+                    "text_w": w,
+                    "text_h": h,
+                    "lx": lx,
+                    "ly": ly,
+                    "bg_rect": (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h),
+                    "vertical": "manual",
+                    "horizontal": "manual",
+                }
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_layout = layout
+
+    return best_layout
+
+
 def _draw_translucent_rectangle(
     overlay: Image.Image,
     bbox: Bbox,
@@ -610,8 +697,64 @@ def _draw_arrow(
     _paste_antialiased_shape(overlay, bounds, draw_shape)
 
 
+def _rect_distance(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    dx = max(bx0 - ax1, ax0 - bx1, 0)
+    dy = max(by0 - ay1, ay0 - by1, 0)
+    return math.hypot(dx, dy)
+
+
+def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def _label_is_close_to_bbox(
+    label_rect: tuple[float, float, float, float],
+    bbox: Bbox,
+    stroke: int,
+) -> bool:
+    target_rect = _bbox_rect(bbox)
+    distance = _rect_distance(label_rect, target_rect)
+    close_threshold = max(64, stroke * 8)
+    if distance > close_threshold:
+        return False
+
+    lx, ly, lx2, ly2 = label_rect
+    bx, by, bx2, by2 = target_rect
+    label_w = max(1.0, lx2 - lx)
+    label_h = max(1.0, ly2 - ly)
+    bbox_w = max(1.0, bx2 - bx)
+    bbox_h = max(1.0, by2 - by)
+    horizontal_overlap = _axis_overlap(lx, lx2, bx, bx2)
+    vertical_overlap = _axis_overlap(ly, ly2, by, by2)
+
+    if distance <= max(24, stroke * 4):
+        return True
+    return (
+        horizontal_overlap >= min(label_w, bbox_w) * 0.2
+        or vertical_overlap >= min(label_h, bbox_h) * 0.2
+    )
+
+
+def _should_draw_arrow(
+    label_rect: tuple[float, float, float, float],
+    bbox: Bbox,
+    show_arrow: Optional[bool],
+    stroke: int,
+) -> bool:
+    if show_arrow is False:
+        return False
+    if _label_is_close_to_bbox(label_rect, bbox, stroke):
+        return False
+    return True
+
+
 def _arrow_endpoints(
-    label_rect: tuple[int, int, int, int], bbox: Bbox
+    label_rect: tuple[float, float, float, float], bbox: Bbox
 ) -> tuple[tuple[float, float], tuple[float, float], str]:
     """Pick a clean start (on label edge) and end (on bbox edge) for the arrow."""
     lx, ly, lx2, ly2 = label_rect
@@ -660,13 +803,12 @@ def _arrow_endpoints(
     return (sx, sy), (ex, ey), style
 
 
-def _render_label_with_blur_bg(
+def _render_label(
     canvas: Image.Image,
     layout: dict,
     color_rgb: tuple[int, int, int],
-    blur_radius: int,
 ) -> None:
-    """Blur the canvas region under the label, mask with rounded corners, draw text on top."""
+    """Draw a flat translucent label capsule and text."""
     lines: list[str] = layout["lines"]
     font: ImageFont.ImageFont = layout["font"]
     lx, ly = layout["lx"], layout["ly"]
@@ -683,12 +825,7 @@ def _render_label_with_blur_bg(
     bg_h = bg_y1 - bg_y0
     radius = max(8, min(bg_w, bg_h) // 2)
 
-    crop = canvas.crop((bg_x0, bg_y0, bg_x1, bg_y1))
-    blurred = crop.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
     mask = _rounded_mask((bg_w, bg_h), radius)
-    canvas.paste(blurred, (bg_x0, bg_y0), mask)
-
     tint = Image.new("RGBA", (bg_w, bg_h), color_rgb + (LABEL_BG_ALPHA,))
     canvas.paste(tint, (bg_x0, bg_y0), mask)
 
@@ -722,7 +859,6 @@ def render(
     margin = max(stroke_width, 8)
     label_pad_x = max(stroke_width * 2, 18)
     label_pad_y = max(stroke_width, 10)
-    blur_radius = max(6, stroke_width * 2)
     rectangle_stroke = max(2.5, round(stroke_width * 0.45))
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -777,39 +913,53 @@ def render(
         avoid_label_rects = [
             layout["bg_rect"] for layout in layouts if layout is not None
         ]
-        layout = _fit_label(
-            render_bbox,
-            ann.label_text.strip(),
-            (img_w, img_h),
-            base_font_size,
-            font_path,
-            gap,
-            margin,
-            label_pad_x,
-            label_pad_y,
-            measure_draw,
-            avoid_label_rects=avoid_label_rects,
-            avoid_target_rects=avoid_target_rects,
-        )
+        layout = None
+        if ann.label_position is not None:
+            layout = _fit_label_at_position(
+                ann.label_position,
+                ann.label_text.strip(),
+                (img_w, img_h),
+                base_font_size,
+                font_path,
+                margin,
+                label_pad_x,
+                label_pad_y,
+                measure_draw,
+            )
+        if layout is None:
+            layout = _fit_label(
+                render_bbox,
+                ann.label_text.strip(),
+                (img_w, img_h),
+                base_font_size,
+                font_path,
+                gap,
+                margin,
+                label_pad_x,
+                label_pad_y,
+                measure_draw,
+                avoid_label_rects=avoid_label_rects,
+                avoid_target_rects=avoid_target_rects,
+            )
         layout["color_rgb"] = color_rgb
         layouts[index] = layout
 
         label_rect = (
             *layout["bg_rect"],
         )
-        arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
-        _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
+        if _should_draw_arrow(label_rect, render_bbox, ann.show_arrow, stroke_width):
+            arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
+            _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
 
     canvas = Image.alpha_composite(canvas, overlay)
 
     for layout in layouts:
         if layout is None:
             continue
-        _render_label_with_blur_bg(
+        _render_label(
             canvas,
             layout,
             layout["color_rgb"],
-            blur_radius,
         )
 
     return canvas.convert("RGB")

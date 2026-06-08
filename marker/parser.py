@@ -45,18 +45,25 @@ def _resolve_one(raw: RawAnnotation, width: int, height: int) -> Annotation:
             request_text=raw.request_text,
             target_description=raw.target_description,
             label_text=raw.label_text,
+            show_arrow=raw.show_arrow,
             color=raw.color,
             not_found=True,
             notes=raw.notes,
         )
 
     bbox = _to_pixels_bbox(raw.bbox, width, height) if raw.bbox else None
+    label_position = (
+        _to_pixels_bbox(raw.label_position, width, height)
+        if raw.label_position and raw.label_text
+        else None
+    )
     not_found = bbox is None
     notes = raw.notes
 
     if bbox is not None and _bbox_looks_hallucinated(bbox, width, height):
         not_found = True
         bbox = None
+        label_position = None
         pct = round(MAX_BBOX_AREA_FRACTION * 100)
         notes = (
             f"Model returned a bbox covering >={pct}% of the image — "
@@ -65,6 +72,8 @@ def _resolve_one(raw: RawAnnotation, width: int, height: int) -> Annotation:
 
     if not_found and not notes:
         notes = "Model returned no usable bbox."
+    if not_found:
+        label_position = None
 
     return Annotation(
         request_index=raw.request_index,
@@ -72,6 +81,8 @@ def _resolve_one(raw: RawAnnotation, width: int, height: int) -> Annotation:
         target_description=raw.target_description,
         label_text=raw.label_text,
         bbox=bbox,
+        label_position=label_position,
+        show_arrow=raw.show_arrow,
         color=raw.color,
         not_found=not_found,
         notes=notes,

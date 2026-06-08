@@ -39,6 +39,8 @@ _ANNOTATION_SCHEMA = {
         "target_description": {"type": "string"},
         "label_text": {"type": ["string", "null"]},
         "bbox": _NORMALIZED_BBOX_SCHEMA,
+        "label_position": _NORMALIZED_BBOX_SCHEMA,
+        "show_arrow": {"type": ["boolean", "null"]},
         "color": {"type": ["string", "null"]},
         "not_found": {"type": "boolean"},
         "notes": {"type": "string"},
@@ -49,6 +51,8 @@ _ANNOTATION_SCHEMA = {
         "target_description",
         "label_text",
         "bbox",
+        "label_position",
+        "show_arrow",
         "color",
         "not_found",
         "notes",
@@ -76,6 +80,8 @@ _PIXEL_ANNOTATION_SCHEMA = {
         "target_description": {"type": "string"},
         "label_text": {"type": ["string", "null"]},
         "bbox": _PIXEL_BBOX_SCHEMA,
+        "label_position": _PIXEL_BBOX_SCHEMA,
+        "show_arrow": {"type": ["boolean", "null"]},
         "color": {"type": ["string", "null"]},
         "not_found": {"type": "boolean"},
         "notes": {"type": "string"},
@@ -86,6 +92,8 @@ _PIXEL_ANNOTATION_SCHEMA = {
         "target_description",
         "label_text",
         "bbox",
+        "label_position",
+        "show_arrow",
         "color",
         "not_found",
         "notes",
@@ -109,8 +117,9 @@ RESPONSE_SCHEMA = {
 SYSTEM_PROMPT = """You are a UI screenshot annotation assistant.
 
 For each annotation request you receive, locate the target UI element in the
-screenshot and return its bounding box. The renderer draws the rectangle,
-arrow, and label automatically — your job is JUST to locate and tag.
+screenshot and return its bounding box. When a label is requested, also choose
+a safe label position that avoids important UI content and decide whether an
+arrow is necessary.
 
 ============================================================
 OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
@@ -142,7 +151,8 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    Keep it under ~40 characters when possible.
 7. not_found = true is the CORRECT answer whenever the target is missing,
    ambiguous, or you are not confident you can locate it precisely. In that
-   case set bbox = null and put a one-line reason in notes
+   case set bbox = null, label_position = null, show_arrow = false, and put a
+   one-line reason in notes
    (e.g., "no element matching 'export button' is visible").
    DO NOT GUESS. DO NOT return a near-full-image bbox as a placeholder.
    DO NOT pick the closest-looking element. An empty annotation is far better
@@ -150,7 +160,25 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    nothing.
    When not_found is false, bbox MUST be a populated object that genuinely
    contains the target.
-8. notes is always a string — use "" when not_found is false and you have
+8. label_position:
+     (a) null when label_text is null.
+     (b) A NORMALIZED rectangle for the desired label capsule when label_text
+         is present. It is the label's own top-left x/y and approximate
+         width/height, NOT the target bbox. Place it in nearby empty space or
+         low-value whitespace. Do not cover the requested target, primary
+         buttons, form fields, menus, headings, readable body text, icons the
+         user needs to inspect, or another annotation label.
+   Prefer positions just above, below, left, or right of the target with a
+   small clear gap. If the label naturally sits next to the target, keep it
+   close and readable rather than pushing it across the screenshot.
+9. show_arrow:
+     (a) false when label_text is null.
+     (b) false when label_position is close to the bbox and the relationship
+         is obvious.
+     (c) true only when the label must be placed farther away, offset from the
+         bbox, or could be mistaken for another target without a pointer.
+   Do NOT use an arrow just because a label exists.
+10. notes is always a string — use "" when not_found is false and you have
    nothing to add.
 
 ============================================================
@@ -215,6 +243,8 @@ Correct response:
       "target_description": "Customer Information card on the right column of the page",
       "label_text": "Customer Details",
       "bbox": {"x": 0.52, "y": 0.18, "width": 0.42, "height": 0.12},
+      "label_position": {"x": 0.52, "y": 0.31, "width": 0.16, "height": 0.04},
+      "show_arrow": false,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -511,25 +541,27 @@ _STEP_RESPONSE_SCHEMA = {
 STEP_SYSTEM_PROMPT = """You are a strict QA/correction step for UI screenshot annotations.
 
 You receive one rendered annotated screenshot and the full current annotation
-JSON. The rendered image contains the original screenshot plus boxes, arrows,
-and labels drawn from the JSON's absolute pixel bbox coordinates.
+JSON. The rendered image contains the original screenshot plus boxes, labels,
+and optional arrows drawn from the JSON's absolute pixel coordinates.
 
 Your job is not to write feedback for another marker pass. Your job is to
 decide whether the current JSON can be accepted or to directly correct the
-bbox coordinates yourself so the renderer can redraw the image immediately.
+bbox, label_position, or show_arrow values yourself so the renderer can redraw
+the image immediately.
 
 Return JSON only.
 
 Decision rules:
 
 - Return decision="accept" only when every requested target is correctly
-  identified and each bbox is anchored to the target's visual edges.
+  identified, each bbox is anchored to the target's visual edges, each label is
+  in a clear position, and arrows are used only when helpful.
 - Return decision="redraw" when any bbox is shifted, floating in whitespace,
   attached to a nearby label instead of the requested target, missing an edge,
   too tight, too loose, or covering a neighboring row/card/control.
-- If a label/arrow overlaps another label because the renderer placed it badly
-  but the bbox coordinates are correct, keep the bbox unchanged; renderer layout
-  is fixed separately.
+- Return decision="redraw" when a label covers important UI content, covers its
+  own target, overlaps another label, or uses an arrow even though it is close
+  enough to the target.
 
 Annotation correction rules:
 
@@ -539,6 +571,13 @@ Annotation correction rules:
 - Coordinates are ABSOLUTE PIXEL integers in the original screenshot coordinate
   system, not normalized floats.
 - bbox is {x, y, width, height}. x/y are top-left. width/height are positive.
+- label_position is null when label_text is null. Otherwise it is the desired
+  label capsule rectangle in absolute pixels. Put it near the target in empty
+  or low-value space, not on important controls, readable text, icons, headings,
+  the target itself, or another label.
+- show_arrow is false when label_text is null or the label is close to the bbox.
+  Set it true only when the label has to sit farther away or the association is
+  ambiguous without a pointer.
 - Clamp all coordinates inside the image dimensions supplied in the prompt.
 - For bordered elements, align to the visible border stroke.
 - For rows/lists, include the whole row from separator to separator and the full
@@ -549,8 +588,8 @@ Annotation correction rules:
 - If a requested target is missing or ambiguous, set not_found=true and bbox=null.
 
 Final check: imagine redrawing from your returned JSON. If the rectangle would
-still visibly miss the requested target edge or sit in whitespace, correct it
-before returning."""
+still visibly miss the requested target edge, sit in whitespace, or if the label
+would hide important UI, correct it before returning."""
 
 
 def run_annotation_step(

@@ -2,15 +2,16 @@
 
 A small Python tool that takes a UI screenshot plus one or more **plain-English
 annotation requests** and produces an annotated image: translucent red
-outlines, opaque arrows, and labelled callouts. A vision LLM (default:
-GPT‑5.5) handles spatial reasoning; Pillow handles the final rendering.
+outlines, optional arrows, and labelled callouts. A vision LLM (default:
+GPT‑5.5) handles spatial reasoning and label placement; Pillow handles the
+final rendering.
 
 ```text
 tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
                          + "rectangle around the Annotations tab labeled 'Active tab'"
                                              ↓
                 tests/rendered/test_2.png  (smooth translucent outlines,
-                                           procedural bent arrows, capsule labels)
+                                           optional arrows, flat capsule labels)
 ```
 
 - One LLM round‑trip per call regardless of how many queries you pass.
@@ -166,6 +167,8 @@ The Python API and the CLI both yield the same JSON structure:
       "target_description": "Customer Information card on the right side",
       "label_text": "Customer Details",
       "bbox": { "x": 1247, "y": 412, "width": 1180, "height": 320 },
+      "label_position": { "x": 1247, "y": 752, "width": 350, "height": 72 },
+      "show_arrow": false,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -176,6 +179,8 @@ The Python API and the CLI both yield the same JSON structure:
       "target_description": "",
       "label_text": null,
       "bbox": null,
+      "label_position": null,
+      "show_arrow": false,
       "color": null,
       "not_found": true,                                 // ← safety
       "notes": "No 'export' button is visible in this screenshot."
@@ -185,8 +190,8 @@ The Python API and the CLI both yield the same JSON structure:
 }
 ```
 
-`bbox` is in absolute pixel coordinates of the input image. `null` means the
-request was not resolved.
+`bbox` and `label_position` are in absolute pixel coordinates of the input
+image. `null` means the request was not resolved or no label was requested.
 
 ### Test fixtures
 
@@ -245,7 +250,7 @@ Tips:
    └──────────┬───────────┘
               ▼
    ┌──── call_vision (1 LLM call, all queries) ────┐
-   │  → JSON: bbox, label_text, color per query     │
+   │  → JSON: bbox, label_position, arrow, color    │
    └──────────┬─────────────────────────────────────┘
               ▼
    ┌──── parse_response ────┐
@@ -261,8 +266,8 @@ Tips:
               ▼
    ┌──── render (Pillow) ─────────┐
    │  antialiased outline         │
-   │  blurred capsule label       │
-   │  procedural curved arrow     │
+   │  flat capsule label          │
+   │  optional procedural arrow   │
    └──────────┬───────────────────┘
               ▼
         annotated PNG
@@ -276,12 +281,13 @@ Tips:
   image area, that's the typical "I have no idea, here's the whole
   thing" hallucination. The parser converts it to `not_found` so nothing
   gets drawn.
-- **Auto‑arrow & label placement** — you don't tell the model where the
-  caption should go. The renderer picks bottom‑left under the bbox by
-  default and falls back to top‑left, bottom‑right, or top‑right when
-  there isn't room. The arrow is drawn from the capsule edge to the nearest
-  bbox edge, so the tail always starts at the annotation text and the head
-  always points at the target.
+- **Model-guided label placement** — when a caption is requested, the model
+  returns a `label_position` rectangle near the target that avoids important UI
+  content. Older JSON without this field still renders through the fallback
+  auto-layout.
+- **Optional arrows** — `show_arrow` is false when the label is close enough
+  to the target. If the label has to sit farther away, the renderer can draw a
+  procedural arrow from the capsule edge to the nearest bbox edge.
 - **Procedural arrows** — arrows are drawn on demand from start/end geometry
   using a quadratic Bezier curve and an open stroked arrowhead. The curve,
   tangent, and head angle are computed per annotation; no pre-rendered arrow
@@ -327,10 +333,10 @@ screenshot-marker/
 - **Stroke width** is auto‑scaled with image size. Rectangle outlines render
   thinner than arrows/labels (`max(2.5, round(stroke × 0.45))`) so the box
   stays readable without overpowering the screenshot.
-- **Rectangle outlines are intentionally translucent.** Arrows are opaque so
-  the pointer remains crisp.
-- **The label text uses white on a translucent colored capsule**. Change the
-  capsule / arrow / outline color via `--color` (or `color=` in Python).
+- **Rectangle outlines are intentionally translucent.** Arrows are drawn only
+  when needed.
+- **The label text uses white on a flat translucent colored capsule**. Change
+  the capsule / arrow / outline color via `--color` (or `color=` in Python).
 
 ---
 
