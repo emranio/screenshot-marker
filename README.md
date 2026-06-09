@@ -167,8 +167,8 @@ The Python API and the CLI both yield the same JSON structure:
       "target_description": "Customer Information card on the right side",
       "label_text": "Customer Details",
       "bbox": { "x": 1247, "y": 412, "width": 1180, "height": 320 },
-      "label_position": { "x": 1247, "y": 752, "width": 350, "height": 72 },
-      "show_arrow": false,
+      "label_position": { "x": 1247, "y": 792, "width": 350, "height": 72 },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -285,9 +285,11 @@ Tips:
   returns a `label_position` rectangle near the target that avoids important UI
   content. Older JSON without this field still renders through the fallback
   auto-layout.
-- **Optional arrows** — `show_arrow` is false when the label is close enough
-  to the target. If the label has to sit farther away, the renderer can draw a
-  procedural arrow from the capsule edge to the nearest bbox edge.
+- **Arrows on by default** — a labeled box gets a procedural arrow from the
+  capsule edge to the nearest bbox edge whenever the label sits apart from the
+  target with any visible gap. The arrow is suppressed only when `show_arrow`
+  is explicitly `false` or the capsule physically overlaps / sits flush against
+  the box (where a pointer would be redundant).
 - **Procedural arrows** — arrows are drawn on demand from start/end geometry
   using a quadratic Bezier curve and an open stroked arrowhead. The curve,
   tangent, and head angle are computed per annotation; no pre-rendered arrow

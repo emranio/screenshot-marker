@@ -171,13 +171,16 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    Prefer positions just above, below, left, or right of the target with a
    small clear gap. If the label naturally sits next to the target, keep it
    close and readable rather than pushing it across the screenshot.
-9. show_arrow:
+9. show_arrow — arrows are ON BY DEFAULT for labeled annotations:
      (a) false when label_text is null.
-     (b) false when label_position is close to the bbox and the relationship
-         is obvious.
-     (c) true only when the label must be placed farther away, offset from the
-         bbox, or could be mistaken for another target without a pointer.
-   Do NOT use an arrow just because a label exists.
+     (b) false ONLY when the label_position capsule physically overlaps or sits
+         flush against the bbox (touching it, with no visible gap) so the
+         association is unmistakable without a pointer.
+     (c) true in EVERY other case — i.e. whenever the label sits in its own
+         space with any visible gap from the target, however small. A normal
+         "small clear gap" placement still gets an arrow.
+   When in doubt, prefer true. Only a label glued directly onto the box edge
+   should set false.
 10. notes is always a string — use "" when not_found is false and you have
    nothing to add.
 
@@ -243,8 +246,8 @@ Correct response:
       "target_description": "Customer Information card on the right column of the page",
       "label_text": "Customer Details",
       "bbox": {"x": 0.52, "y": 0.18, "width": 0.42, "height": 0.12},
-      "label_position": {"x": 0.52, "y": 0.31, "width": 0.16, "height": 0.04},
-      "show_arrow": false,
+      "label_position": {"x": 0.52, "y": 0.34, "width": 0.16, "height": 0.04},
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -252,7 +255,10 @@ Correct response:
   ]
 }
 
-Notice: label_text is the quoted phrase only, not the whole sentence. color
+Notice: the label sits below the card with a visible gap, so show_arrow is
+true (the default for a labeled box) — only set it false when the capsule is
+flush against the bbox. label_text is the quoted phrase only, not the whole
+sentence. color
 is null (request said "red" generically, which is the default — only return
 a hex string when the user names a non-default color like "blue card" or
 "green box"). All required fields are present. JSON only, no prose.
@@ -560,8 +566,9 @@ Decision rules:
   attached to a nearby label instead of the requested target, missing an edge,
   too tight, too loose, or covering a neighboring row/card/control.
 - Return decision="redraw" when a label covers important UI content, covers its
-  own target, overlaps another label, or uses an arrow even though it is close
-  enough to the target.
+  own target, overlaps another label, uses an arrow even though the capsule is
+  flush against the target, or omits an arrow even though the label sits apart
+  from the target with a visible gap.
 
 Annotation correction rules:
 
@@ -575,9 +582,9 @@ Annotation correction rules:
   label capsule rectangle in absolute pixels. Put it near the target in empty
   or low-value space, not on important controls, readable text, icons, headings,
   the target itself, or another label.
-- show_arrow is false when label_text is null or the label is close to the bbox.
-  Set it true only when the label has to sit farther away or the association is
-  ambiguous without a pointer.
+- show_arrow defaults to true for labeled annotations. Set it false only when
+  label_text is null or the label capsule physically overlaps / sits flush
+  against the bbox. Any visible gap between label and target keeps it true.
 - Clamp all coordinates inside the image dimensions supplied in the prompt.
 - For bordered elements, align to the visible border stroke.
 - For rows/lists, include the whole row from separator to separator and the full

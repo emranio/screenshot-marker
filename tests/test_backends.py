@@ -127,15 +127,24 @@ class AnnotationContractTests(unittest.TestCase):
         )
         self.assertIs(annotations[0].show_arrow, False)
 
-    def test_close_labels_do_not_draw_arrows_even_when_requested(self) -> None:
+    def test_touching_labels_suppress_arrows(self) -> None:
+        # A label flush against the box (no visible gap) needs no arrow, even
+        # if the model asked for one.
         bbox = Bbox(x=50, y=50, width=80, height=30)
-        close_label = (52.0, 86.0, 150.0, 116.0)
-        far_label = (10.0, 170.0, 108.0, 200.0)
+        touching_label = (52.0, 86.0, 150.0, 116.0)  # ~6px below the box edge
 
-        self.assertFalse(drawing._should_draw_arrow(close_label, bbox, None, 4))
-        self.assertFalse(drawing._should_draw_arrow(close_label, bbox, True, 4))
-        self.assertTrue(drawing._should_draw_arrow(far_label, bbox, None, 4))
-        self.assertFalse(drawing._should_draw_arrow(far_label, bbox, False, 4))
+        self.assertFalse(drawing._should_draw_arrow(touching_label, bbox, None, 4))
+        self.assertFalse(drawing._should_draw_arrow(touching_label, bbox, True, 4))
+
+    def test_offset_labels_draw_arrows_by_default(self) -> None:
+        # A label sitting apart from the box gets an arrow by default; only an
+        # explicit show_arrow=False suppresses it.
+        bbox = Bbox(x=50, y=50, width=80, height=30)
+        offset_label = (10.0, 170.0, 108.0, 200.0)  # 90px below, clear gap
+
+        self.assertTrue(drawing._should_draw_arrow(offset_label, bbox, None, 4))
+        self.assertTrue(drawing._should_draw_arrow(offset_label, bbox, True, 4))
+        self.assertFalse(drawing._should_draw_arrow(offset_label, bbox, False, 4))
 
     def test_render_accepts_model_label_position(self) -> None:
         image = Image.new("RGB", (240, 160), "white")

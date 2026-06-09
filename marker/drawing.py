@@ -708,36 +708,21 @@ def _rect_distance(
     return math.hypot(dx, dy)
 
 
-def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
-    return max(0.0, min(a1, b1) - max(a0, b0))
-
-
-def _label_is_close_to_bbox(
+def _label_touches_bbox(
     label_rect: tuple[float, float, float, float],
     bbox: Bbox,
     stroke: int,
 ) -> bool:
+    """True only when the label capsule overlaps or sits flush against the box.
+
+    An arrow is redundant when the label is physically attached to its target,
+    but useful for any visible gap. ``_rect_distance`` returns 0 when the
+    rectangles overlap and otherwise the size of the gap between their nearest
+    edges; we treat anything within a couple of stroke widths as "touching".
+    """
     target_rect = _bbox_rect(bbox)
-    distance = _rect_distance(label_rect, target_rect)
-    close_threshold = max(64, stroke * 8)
-    if distance > close_threshold:
-        return False
-
-    lx, ly, lx2, ly2 = label_rect
-    bx, by, bx2, by2 = target_rect
-    label_w = max(1.0, lx2 - lx)
-    label_h = max(1.0, ly2 - ly)
-    bbox_w = max(1.0, bx2 - bx)
-    bbox_h = max(1.0, by2 - by)
-    horizontal_overlap = _axis_overlap(lx, lx2, bx, bx2)
-    vertical_overlap = _axis_overlap(ly, ly2, by, by2)
-
-    if distance <= max(24, stroke * 4):
-        return True
-    return (
-        horizontal_overlap >= min(label_w, bbox_w) * 0.2
-        or vertical_overlap >= min(label_h, bbox_h) * 0.2
-    )
+    touch_gap = max(6, stroke * 2)
+    return _rect_distance(label_rect, target_rect) <= touch_gap
 
 
 def _should_draw_arrow(
@@ -746,11 +731,11 @@ def _should_draw_arrow(
     show_arrow: Optional[bool],
     stroke: int,
 ) -> bool:
+    # Arrows are on by default for labeled annotations. Only an explicit
+    # show_arrow=False or a label glued to the box suppresses them.
     if show_arrow is False:
         return False
-    if _label_is_close_to_bbox(label_rect, bbox, stroke):
-        return False
-    return True
+    return not _label_touches_bbox(label_rect, bbox, stroke)
 
 
 def _arrow_endpoints(
