@@ -164,13 +164,24 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
      (a) null when label_text is null.
      (b) A NORMALIZED rectangle for the desired label capsule when label_text
          is present. It is the label's own top-left x/y and approximate
-         width/height, NOT the target bbox. Place it in nearby empty space or
-         low-value whitespace. Do not cover the requested target, primary
-         buttons, form fields, menus, headings, readable body text, icons the
-         user needs to inspect, or another annotation label.
-   Prefer positions just above, below, left, or right of the target with a
-   small clear gap. If the label naturally sits next to the target, keep it
-   close and readable rather than pushing it across the screenshot.
+         width/height, NOT the target bbox. Do not cover the requested target,
+         primary buttons, form fields, menus, headings, readable body text,
+         icons the user needs to inspect, or another annotation label.
+   PLACE THE LABEL AS CLOSE TO THE BBOX AS POSSIBLE. The label capsule should
+   sit immediately adjacent to the target's nearest edge — directly above,
+   below, left, or right of the bbox — separated by only a tiny gap (aim for
+   ~1-2% of the image dimension, just enough that the capsule does not overlap
+   the bbox border). Treat the smallest gap that still avoids overlap as the
+   goal.
+   Pick the edge that has free whitespace nearest the target: check
+   above/below/left/right of the bbox in that priority order and use the FIRST
+   side that has room for the capsule without covering other important content.
+   Do NOT push the label into distant empty space, a far corner, the page
+   margin, or across the screenshot just because more open room exists there.
+   A label far from its target is WRONG even if the gap area looks emptier —
+   nearness to the bbox beats roominess. Only move the label one capsule-width
+   further out (still on the nearest viable side) if every immediately-adjacent
+   side would overlap protected content.
 9. show_arrow — arrows are ON BY DEFAULT for labeled annotations:
      (a) false when label_text is null.
      (b) false ONLY when the label_position capsule physically overlaps or sits
@@ -569,6 +580,12 @@ Decision rules:
   own target, overlaps another label, uses an arrow even though the capsule is
   flush against the target, or omits an arrow even though the label sits apart
   from the target with a visible gap.
+- Return decision="redraw" when a label sits farther from its target than
+  necessary — in distant whitespace, a far corner, or the page margin — while a
+  nearer edge of the bbox had room. When correcting, MOVE the label_position so
+  the capsule sits immediately adjacent to the target's nearest free edge with
+  only a tiny gap (just enough to clear the bbox border). Closeness to the bbox
+  takes priority over picking the emptiest region.
 
 Annotation correction rules:
 
@@ -579,9 +596,10 @@ Annotation correction rules:
   system, not normalized floats.
 - bbox is {x, y, width, height}. x/y are top-left. width/height are positive.
 - label_position is null when label_text is null. Otherwise it is the desired
-  label capsule rectangle in absolute pixels. Put it near the target in empty
-  or low-value space, not on important controls, readable text, icons, headings,
-  the target itself, or another label.
+  label capsule rectangle in absolute pixels. Put it as close to the target as
+  possible — immediately adjacent to the bbox's nearest free edge with only a
+  tiny gap — not on important controls, readable text, icons, headings, the
+  target itself, or another label. Do not park it in distant whitespace.
 - show_arrow defaults to true for labeled annotations. Set it false only when
   label_text is null or the label capsule physically overlaps / sits flush
   against the bbox. Any visible gap between label and target keeps it true.
