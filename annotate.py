@@ -18,9 +18,11 @@ from marker import annotate
 from marker.config import (
     AUTH_MODES,
     DEFAULT_COLOR,
-    DEFAULT_MODEL,
+    DEFAULT_PROVIDER,
     DEFAULT_REASONING_EFFORT,
+    PROVIDERS,
     REASONING_EFFORTS,
+    default_model_for,
 )
 
 
@@ -46,21 +48,41 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Path to a JSON array of query strings, or a saved annotation result JSON.",
     )
-    p.add_argument("--model", default=DEFAULT_MODEL, help=f"Vision model (default: {DEFAULT_MODEL}).")
+    p.add_argument(
+        "--provider",
+        choices=PROVIDERS,
+        default=None,
+        help=(
+            f"Vision backend. Defaults to $MARKER_PROVIDER or {DEFAULT_PROVIDER}. "
+            f"Default models — codex: {default_model_for('codex')}; "
+            f"gemini: {default_model_for('gemini')}; "
+            f"claude: {default_model_for('claude')}."
+        ),
+    )
+    p.add_argument(
+        "--model",
+        default=None,
+        help="Vision model. Defaults to the selected provider's default model.",
+    )
     p.add_argument(
         "--reasoning-effort",
         choices=REASONING_EFFORTS,
         default=None,
         help=(
-            "Reasoning effort for the Agents SDK Codex path. Defaults to "
+            "Reasoning effort for the Codex/OpenAI and Claude backends "
+            "(ignored by Gemini). Defaults to "
             f"$OPENAI_REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
         ),
     )
     p.add_argument(
         "--auth",
-        choices=AUTH_MODES,
         default=None,
-        help="SDK auth mode. Defaults to $MARKER_AUTH or codex.",
+        metavar="{%s}" % "|".join(AUTH_MODES),
+        help=(
+            "Auth mode for the selected provider: 'auth' uses native credentials "
+            "(codex login / Vertex AI), 'api' uses an API key. Defaults to "
+            "$MARKER_AUTH or the provider default."
+        ),
     )
     p.add_argument("--color", default=DEFAULT_COLOR, help=f"Default annotation color (default: {DEFAULT_COLOR}).")
     p.add_argument("--stroke", type=int, default=None, help="Stroke width in pixels (auto-scaled if omitted).")
@@ -130,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         image_path=args.image,
         queries=queries,
         output_path=args.output,
+        provider=args.provider,
         model=args.model,
         auth=args.auth,
         reasoning_effort=args.reasoning_effort,

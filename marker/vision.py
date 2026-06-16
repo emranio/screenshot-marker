@@ -11,7 +11,12 @@ from typing import Any
 
 from PIL import Image
 
-from .config import get_codex_api_key, resolve_auth_mode, resolve_reasoning_effort
+from .config import (
+    get_codex_api_key,
+    resolve_auth_mode,
+    resolve_provider,
+    resolve_reasoning_effort,
+)
 from .models import NormalizedBbox
 
 def image_size(path: str | Path) -> tuple[int, int]:
@@ -294,18 +299,21 @@ def call_vision(
     queries: list[str],
     model: str,
     *,
+    provider: str | None = None,
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
-    resolved_auth = resolve_auth_mode(auth)
+    resolved_provider = resolve_provider(provider)
+    resolved_auth = resolve_auth_mode(auth, resolved_provider)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
     user_text = build_user_prompt(
         queries,
         width,
         height,
     )
-    return _call_codex_json(
+    return _call_json(
+        provider=resolved_provider,
         image_paths=[image_path],
         system_prompt=SYSTEM_PROMPT,
         user_text=user_text,
@@ -383,6 +391,57 @@ def _call_codex_json(
             api_key=api_key,
             reasoning_effort=reasoning_effort,
         )
+    )
+
+
+def _call_json(
+    *,
+    provider: str,
+    image_paths: list[str | Path],
+    system_prompt: str,
+    user_text: str,
+    model: str,
+    output_schema: dict[str, Any],
+    auth: str,
+    api_key: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    """Dispatch one structured-JSON vision call to the selected provider."""
+    if provider == "gemini":
+        from .providers import gemini
+
+        return gemini.call_json(
+            image_paths=image_paths,
+            system_prompt=system_prompt,
+            user_text=user_text,
+            model=model,
+            output_schema=output_schema,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+    if provider == "claude":
+        from .providers import claude
+
+        return claude.call_json(
+            image_paths=image_paths,
+            system_prompt=system_prompt,
+            user_text=user_text,
+            model=model,
+            output_schema=output_schema,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+    return _call_codex_json(
+        image_paths=image_paths,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        model=model,
+        output_schema=output_schema,
+        auth=auth,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -504,18 +563,21 @@ def refine_bbox_call(
     target_description: str,
     model: str,
     *,
+    provider: str | None = None,
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
 ) -> NormalizedBbox | None:
     """Ask the model for a tight bbox of ``target_description`` within a cropped image."""
-    resolved_auth = resolve_auth_mode(auth)
+    resolved_provider = resolve_provider(provider)
+    resolved_auth = resolve_auth_mode(auth, resolved_provider)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
     try:
         with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
             tmp.write(base64.b64decode(crop_b64))
             tmp.flush()
-            raw = _call_codex_json(
+            raw = _call_json(
+                provider=resolved_provider,
                 image_paths=[tmp.name],
                 system_prompt=REFINE_SYSTEM_PROMPT,
                 user_text=f"Target element: {target_description}",
@@ -591,6 +653,7 @@ def determine_crop_region(
     height: int,
     model: str,
     *,
+    provider: str | None = None,
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
@@ -601,7 +664,8 @@ def determine_crop_region(
     reached or returned an unusable answer (the caller then falls back to the
     union of the drawn annotation rects).
     """
-    resolved_auth = resolve_auth_mode(auth)
+    resolved_provider = resolve_provider(provider)
+    resolved_auth = resolve_auth_mode(auth, resolved_provider)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
     user_text = "\n".join(
         [
@@ -617,7 +681,8 @@ def determine_crop_region(
         ]
     )
     try:
-        raw = _call_codex_json(
+        raw = _call_json(
+            provider=resolved_provider,
             image_paths=[image_path],
             system_prompt=CROP_SYSTEM_PROMPT,
             user_text=user_text,
@@ -719,6 +784,7 @@ def run_annotation_step(
     width: int,
     height: int,
     model: str,
+    provider: str | None = None,
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
@@ -746,6 +812,7 @@ def run_annotation_step(
         user_text=user_text,
         model=model,
         output_schema=_STEP_RESPONSE_SCHEMA,
+        provider=provider,
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
@@ -763,13 +830,16 @@ def _call_json_with_images(
     user_text: str,
     model: str,
     output_schema: dict[str, Any],
+    provider: str | None,
     auth: str | None,
     api_key: str | None,
     reasoning_effort: str | None,
 ) -> dict[str, Any]:
-    resolved_auth = resolve_auth_mode(auth)
+    resolved_provider = resolve_provider(provider)
+    resolved_auth = resolve_auth_mode(auth, resolved_provider)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
-    return _call_codex_json(
+    return _call_json(
+        provider=resolved_provider,
         image_paths=image_paths,
         system_prompt=system_prompt,
         user_text=user_text,

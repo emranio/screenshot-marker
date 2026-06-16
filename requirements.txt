@@ -1,4 +1,6 @@
 openai-agents>=0.17.4
+google-genai>=1.0.0
+anthropic>=0.40.0
 pillow>=10.4.0
 pydantic>=2.7.0
 python-dotenv>=1.0.0

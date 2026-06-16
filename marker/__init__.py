@@ -13,9 +13,11 @@ from PIL import Image
 from .config import (
     AuthMode,
     DEFAULT_COLOR,
-    DEFAULT_MODEL,
+    Provider,
     auto_stroke_width,
     resolve_auth_mode,
+    resolve_model,
+    resolve_provider,
     resolve_reasoning_effort,
     resolve_font_path,
 )
@@ -51,7 +53,8 @@ def annotate(
     queries: list[str],
     output_path: Optional[str | Path] = None,
     *,
-    model: str = DEFAULT_MODEL,
+    provider: str | None = None,
+    model: Optional[str] = None,
     color: str = DEFAULT_COLOR,
     stroke_width: Optional[int] = None,
     font_path: Optional[str] = None,
@@ -69,6 +72,11 @@ def annotate(
 
     A single vision-model call resolves all queries; the resulting rectangles,
     optional arrows, and labels are drawn onto the image and saved as PNG.
+
+    ``provider`` selects the vision backend ("codex" or "gemini"); when omitted
+    it falls back to ``$MARKER_PROVIDER`` (default "codex"). ``model`` defaults
+    to that provider's default model. ``auth`` is "auth" (the provider's native
+    login/credentials) or "api" (an API key).
 
     If ``output_path`` is not provided, the result is written next to the
     input as ``<image_stem>_annotated.png``.
@@ -90,7 +98,9 @@ def annotate(
     if not queries:
         raise ValueError("queries must contain at least one annotation request.")
 
-    resolved_auth = resolve_auth_mode(auth)
+    resolved_provider = resolve_provider(provider)
+    resolved_model = resolve_model(model, resolved_provider)
+    resolved_auth = resolve_auth_mode(auth, resolved_provider)
     resolved_effort = resolve_reasoning_effort(reasoning_effort)
     image_path = Path(image_path)
     output_path = Path(output_path) if output_path is not None else _default_output_path(image_path)
@@ -100,13 +110,14 @@ def annotate(
             image_path=image_path,
             queries=queries,
             output_path=output_path,
-            model=model,
+            model=resolved_model,
             color=color,
             stroke_width=stroke_width,
             font_path=font_path,
             refine=refine,
             refine_padding=refine_padding,
             draw_arrows=draw_arrows,
+            provider=resolved_provider,
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
@@ -116,13 +127,14 @@ def annotate(
             image_path=image_path,
             queries=queries,
             output_path=output_path,
-            model=model,
+            model=resolved_model,
             color=color,
             stroke_width=stroke_width,
             font_path=font_path,
             refine=refine,
             refine_padding=refine_padding,
             draw_arrows=draw_arrows,
+            provider=resolved_provider,
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
@@ -132,7 +144,8 @@ def annotate(
         _apply_crop(
             result,
             crop_padding=crop_padding,
-            model=model,
+            model=resolved_model,
+            provider=resolved_provider,
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
@@ -153,6 +166,7 @@ def _annotate_once(
     refine: bool,
     refine_padding: float,
     draw_arrows: bool,
+    provider: Provider,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -164,6 +178,7 @@ def _annotate_once(
         height,
         queries,
         model,
+        provider=provider,
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
@@ -177,6 +192,7 @@ def _annotate_once(
                 annotations,
                 model=model,
                 padding=refine_padding,
+                provider=provider,
                 auth=auth,
                 api_key=api_key,
                 reasoning_effort=reasoning_effort,
@@ -217,6 +233,7 @@ def _annotate_with_steps(
     refine: bool,
     refine_padding: float,
     draw_arrows: bool,
+    provider: Provider,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -241,6 +258,7 @@ def _annotate_with_steps(
             refine=refine,
             refine_padding=refine_padding,
             draw_arrows=draw_arrows,
+            provider=provider,
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
@@ -252,6 +270,7 @@ def _annotate_with_steps(
             width=width,
             height=height,
             model=model,
+            provider=provider,
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
@@ -381,6 +400,7 @@ def _refine_one(
     *,
     model: str,
     padding: float,
+    provider: Provider,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -394,6 +414,7 @@ def _refine_one(
         crop_b64,
         target,
         model,
+        provider=provider,
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
@@ -423,6 +444,7 @@ def _refine_bboxes(
     *,
     model: str,
     padding: float,
+    provider: Provider,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -439,6 +461,7 @@ def _refine_bboxes(
                     ann,
                     model=model,
                     padding=padding,
+                    provider=provider,
                     auth=auth,
                     api_key=api_key,
                     reasoning_effort=reasoning_effort,
@@ -510,6 +533,7 @@ def _apply_crop(
     *,
     crop_padding: float,
     model: str,
+    provider: Provider,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -535,6 +559,7 @@ def _apply_crop(
             img_w,
             img_h,
             model,
+            provider=provider,
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
