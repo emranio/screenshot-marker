@@ -10,9 +10,10 @@ from typing import Literal, Optional, cast
 # ---------------------------------------------------------------------------
 # Each provider is a separate "agent SDK" backend that turns an image + prompt
 # into structured JSON. Codex uses the OpenAI Agents SDK; Gemini uses the
-# Google Gen AI SDK. New providers (e.g. Claude) plug in the same way.
-Provider = Literal["codex", "gemini"]
-PROVIDERS: tuple[Provider, ...] = ("codex", "gemini")
+# Google Gen AI SDK; Claude uses the Anthropic SDK. New providers plug in the
+# same way.
+Provider = Literal["codex", "gemini", "claude"]
+PROVIDERS: tuple[Provider, ...] = ("codex", "gemini", "claude")
 _FALLBACK_PROVIDER: Provider = "codex"
 
 # ---------------------------------------------------------------------------
@@ -21,9 +22,12 @@ _FALLBACK_PROVIDER: Provider = "codex"
 #   "auth" -> the provider's native, non-API-key credentials
 #               codex  : a local `codex login` (ChatGPT/Codex subscription)
 #               gemini : Vertex AI via Google Cloud Application Default Creds
+#               claude : a Claude subscription bearer token (ANTHROPIC_AUTH_TOKEN
+#                        / CLAUDE_CODE_OAUTH_TOKEN) or a `claude`/`ant` login
 #   "api"  -> an explicit API key
 #               codex  : CODEX_API_KEY / OPENAI_API_KEY
 #               gemini : GEMINI_API_KEY / GOOGLE_API_KEY
+#               claude : ANTHROPIC_API_KEY / CLAUDE_API_KEY
 AuthMode = Literal["auth", "api"]
 AUTH_MODES: tuple[AuthMode, ...] = ("auth", "api")
 
@@ -46,13 +50,25 @@ REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
 _FALLBACK_REASONING_EFFORT: ReasoningEffort = "medium"
 
 # Per-provider model selection: env var to read and the fallback default.
-_MODEL_ENV: dict[Provider, str] = {"codex": "OPENAI_MODEL", "gemini": "GEMINI_MODEL"}
-_FALLBACK_MODEL: dict[Provider, str] = {"codex": "gpt-5.5", "gemini": "gemini-2.5-pro"}
+_MODEL_ENV: dict[Provider, str] = {
+    "codex": "OPENAI_MODEL",
+    "gemini": "GEMINI_MODEL",
+    "claude": "CLAUDE_MODEL",
+}
+_FALLBACK_MODEL: dict[Provider, str] = {
+    "codex": "gpt-5.5",
+    "gemini": "gemini-2.5-pro",
+    "claude": "claude-opus-4-8",
+}
 
 # Per-provider default auth mode when neither a flag nor MARKER_AUTH is set.
-# Codex defaults to its subscription login; Gemini defaults to an API key
-# (the common Google AI Studio path).
-_DEFAULT_AUTH: dict[Provider, AuthMode] = {"codex": "auth", "gemini": "api"}
+# Codex defaults to its subscription login; Gemini and Claude default to an API
+# key (the common Google AI Studio / Anthropic API path).
+_DEFAULT_AUTH: dict[Provider, AuthMode] = {
+    "codex": "auth",
+    "gemini": "api",
+    "claude": "api",
+}
 
 
 def load_env() -> None:
@@ -175,10 +191,31 @@ def get_gemini_api_key(api_key: str | None = None) -> str:
     return key
 
 
+def get_claude_api_key(api_key: str | None = None) -> str:
+    load_env()
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "API auth requires ANTHROPIC_API_KEY or CLAUDE_API_KEY. "
+            "For subscription auth, use MARKER_AUTH=auth with ANTHROPIC_AUTH_TOKEN "
+            "(or a `claude` / `ant` login)."
+        )
+    return key
+
+
+def get_claude_auth_token() -> str | None:
+    """Bearer token for Claude native auth, or None to use default credential resolution."""
+    load_env()
+    return os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+
+
 def get_api_key(provider: str, api_key: str | None = None) -> str:
     """Resolve the API key for ``provider`` from the argument or environment."""
-    if resolve_provider(provider) == "gemini":
+    prov = resolve_provider(provider)
+    if prov == "gemini":
         return get_gemini_api_key(api_key)
+    if prov == "claude":
+        return get_claude_api_key(api_key)
     return get_codex_api_key(api_key)
 
 

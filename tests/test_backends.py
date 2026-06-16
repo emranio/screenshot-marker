@@ -421,6 +421,10 @@ class ProviderConfigTests(unittest.TestCase):
         ):
             self.assertEqual(config.resolve_provider(), "gemini")
             self.assertEqual(config.resolve_provider("codex"), "codex")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"MARKER_PROVIDER": "claude"}, clear=True
+        ):
+            self.assertEqual(config.resolve_provider(), "claude")
 
     def test_resolve_provider_rejects_unknown(self) -> None:
         with patch("marker.config.load_env", lambda: None):
@@ -433,6 +437,7 @@ class ProviderConfigTests(unittest.TestCase):
         ):
             self.assertEqual(config.resolve_auth_mode(provider="codex"), "auth")
             self.assertEqual(config.resolve_auth_mode(provider="gemini"), "api")
+            self.assertEqual(config.resolve_auth_mode(provider="claude"), "api")
 
     def test_resolve_model_per_provider(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
@@ -440,12 +445,33 @@ class ProviderConfigTests(unittest.TestCase):
         ):
             self.assertEqual(config.resolve_model(None, "codex"), "gpt-5.5")
             self.assertEqual(config.resolve_model(None, "gemini"), "gemini-2.5-pro")
+            self.assertEqual(config.resolve_model(None, "claude"), "claude-opus-4-8")
             self.assertEqual(config.resolve_model("custom-model", "gemini"), "custom-model")
         with patch("marker.config.load_env", lambda: None), patch.dict(
-            os.environ, {"GEMINI_MODEL": "gemini-x", "OPENAI_MODEL": "gpt-x"}, clear=True
+            os.environ,
+            {"GEMINI_MODEL": "gemini-x", "OPENAI_MODEL": "gpt-x", "CLAUDE_MODEL": "claude-x"},
+            clear=True,
         ):
             self.assertEqual(config.resolve_model(None, "gemini"), "gemini-x")
             self.assertEqual(config.resolve_model(None, "codex"), "gpt-x")
+            self.assertEqual(config.resolve_model(None, "claude"), "claude-x")
+
+    def test_get_claude_api_key_accepts_either_env(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"ANTHROPIC_API_KEY": "ant-key"}, clear=True
+        ):
+            self.assertEqual(config.get_claude_api_key(), "ant-key")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"CLAUDE_API_KEY": "claude-key"}, clear=True
+        ):
+            self.assertEqual(config.get_claude_api_key(), "claude-key")
+
+    def test_get_claude_api_key_missing_raises(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ANTHROPIC_API_KEY or CLAUDE_API_KEY"):
+                config.get_claude_api_key()
 
     def test_get_gemini_api_key_accepts_either_env(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
@@ -550,6 +576,132 @@ class GeminiProviderTests(unittest.TestCase):
                     output_schema=vision.RESPONSE_SCHEMA,
                     auth="auth",
                 )
+
+
+class ClaudeProviderTests(unittest.TestCase):
+    def test_call_vision_routes_to_claude_backend(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_call_json(**kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return RAW_RESPONSE
+
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            Image.new("RGB", (2, 2), "white").save(image_file.name)
+            with patch(
+                "marker.providers.claude.call_json", side_effect=fake_call_json
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
+                os.environ, {"ANTHROPIC_API_KEY": "ant-key"}, clear=True
+            ):
+                result = vision.call_vision(
+                    image_file.name,
+                    100,
+                    50,
+                    ["box around main"],
+                    "claude-opus-4-8",
+                    provider="claude",
+                    auth="api",
+                    reasoning_effort="medium",
+                )
+
+        self.assertEqual(result, RAW_RESPONSE)
+        self.assertEqual(captured["model"], "claude-opus-4-8")
+        self.assertEqual(captured["auth"], "api")
+        self.assertEqual(captured["reasoning_effort"], "medium")
+        self.assertIs(captured["output_schema"], vision.RESPONSE_SCHEMA)
+        self.assertEqual(captured["system_prompt"], vision.SYSTEM_PROMPT)
+
+    def test_backend_builds_structured_request_with_api_key(self) -> None:
+        captured: dict[str, object] = {}
+        fake_anthropic = _fake_anthropic_module(captured, json.dumps(RAW_RESPONSE))
+
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            Image.new("RGB", (2, 2), "white").save(image_file.name)
+            with patch(
+                "marker.providers.claude._load_anthropic", return_value=fake_anthropic
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
+                os.environ, {"ANTHROPIC_API_KEY": "ant-key"}, clear=True
+            ):
+                from marker.providers import claude
+
+                result = claude.call_json(
+                    image_paths=[image_file.name],
+                    system_prompt=vision.SYSTEM_PROMPT,
+                    user_text="hello",
+                    model="claude-opus-4-8",
+                    output_schema=vision.RESPONSE_SCHEMA,
+                    auth="api",
+                    reasoning_effort="medium",
+                )
+
+        self.assertEqual(result, RAW_RESPONSE)
+        self.assertEqual(captured["api_key"], "ant-key")
+        self.assertIsNone(captured["auth_token"])
+        kwargs = captured["create_kwargs"]
+        self.assertEqual(kwargs["model"], "claude-opus-4-8")
+        self.assertIs(kwargs["output_config"]["format"]["schema"], vision.RESPONSE_SCHEMA)
+        self.assertEqual(kwargs["output_config"]["effort"], "medium")
+        self.assertEqual(kwargs["thinking"], {"type": "adaptive"})
+        content = kwargs["messages"][0]["content"]
+        self.assertEqual(content[0]["type"], "image")
+        self.assertEqual(content[-1]["type"], "text")
+        self.assertNotIn("extra_headers", kwargs)  # API key path: no OAuth beta header
+
+    def test_backend_uses_bearer_token_and_oauth_beta_for_native_auth(self) -> None:
+        captured: dict[str, object] = {}
+        fake_anthropic = _fake_anthropic_module(captured, json.dumps(RAW_RESPONSE))
+
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            Image.new("RGB", (2, 2), "white").save(image_file.name)
+            with patch(
+                "marker.providers.claude._load_anthropic", return_value=fake_anthropic
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
+                os.environ, {"ANTHROPIC_AUTH_TOKEN": "oat-token"}, clear=True
+            ):
+                from marker.providers import claude
+
+                claude.call_json(
+                    image_paths=[image_file.name],
+                    system_prompt="sys",
+                    user_text="user",
+                    model="claude-opus-4-8",
+                    output_schema=vision.RESPONSE_SCHEMA,
+                    auth="auth",
+                )
+
+        self.assertEqual(captured["auth_token"], "oat-token")
+        self.assertIsNone(captured["api_key"])
+        self.assertEqual(
+            captured["create_kwargs"]["extra_headers"]["anthropic-beta"],
+            "oauth-2025-04-20",
+        )
+
+
+def _fake_anthropic_module(captured: dict[str, object], response_text: str) -> object:
+    import types as _types
+
+    class FakeBlock:
+        def __init__(self, text: str) -> None:
+            self.type = "text"
+            self.text = text
+
+    class FakeMessage:
+        def __init__(self, text: str) -> None:
+            self.content = [FakeBlock(text)]
+            self.stop_reason = "end_turn"
+
+    class FakeMessages:
+        def create(self, **kwargs: object) -> FakeMessage:
+            captured["create_kwargs"] = kwargs
+            return FakeMessage(response_text)
+
+    class FakeAnthropic:
+        def __init__(self, *, api_key: str | None = None, auth_token: str | None = None) -> None:
+            captured["api_key"] = api_key
+            captured["auth_token"] = auth_token
+            self.messages = FakeMessages()
+
+    return _types.SimpleNamespace(Anthropic=FakeAnthropic)
 
 
 def _fake_codex_classes(captured: dict[str, object], final_response: str) -> tuple[type, type, type]:

@@ -16,6 +16,7 @@ of the package is provider-agnostic:
     ) -> dict
 
 The Codex backend lives in ``marker.vision`` (kept there so its long-standing
-test seams stay valid); Gemini lives in ``marker.providers.gemini``. New
-providers (e.g. Claude) can be added as another module here.
+test seams stay valid); Gemini lives in ``marker.providers.gemini`` and Claude
+in ``marker.providers.claude``. New providers can be added as another module
+here and wired into the dispatcher in ``marker.vision``.
 """

@@ -54,8 +54,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             f"Vision backend. Defaults to $MARKER_PROVIDER or {DEFAULT_PROVIDER}. "
-            f"codex default model: {default_model_for('codex')}; "
-            f"gemini default model: {default_model_for('gemini')}."
+            f"Default models — codex: {default_model_for('codex')}; "
+            f"gemini: {default_model_for('gemini')}; "
+            f"claude: {default_model_for('claude')}."
         ),
     )
     p.add_argument(
@@ -68,8 +69,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=REASONING_EFFORTS,
         default=None,
         help=(
-            "Reasoning effort for the Codex/OpenAI backend (ignored by Gemini). "
-            f"Defaults to $OPENAI_REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
+            "Reasoning effort for the Codex/OpenAI and Claude backends "
+            "(ignored by Gemini). Defaults to "
+            f"$OPENAI_REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
         ),
     )
     p.add_argument(

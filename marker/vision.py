@@ -420,6 +420,19 @@ def _call_json(
             api_key=api_key,
             reasoning_effort=reasoning_effort,
         )
+    if provider == "claude":
+        from .providers import claude
+
+        return claude.call_json(
+            image_paths=image_paths,
+            system_prompt=system_prompt,
+            user_text=user_text,
+            model=model,
+            output_schema=output_schema,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
     return _call_codex_json(
         image_paths=image_paths,
         system_prompt=system_prompt,

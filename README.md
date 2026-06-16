@@ -5,11 +5,12 @@ annotation requests** and produces an annotated image: translucent red
 outlines, optional arrows, and labelled callouts. A vision LLM handles spatial
 reasoning and label placement; Pillow handles the final rendering.
 
-The vision backend is pluggable. Two **providers** ship today — `codex`
-(OpenAI Agents SDK, default, `gpt-5.5`) and `gemini` (Google Gen AI SDK,
-`gemini-2.5-pro`) — and each supports two auth modes: native credentials
-(`auth`) or an API key (`api`). The prompt and flow are identical across
-providers; only the underlying agent changes.
+The vision backend is pluggable. Three **providers** ship today — `codex`
+(OpenAI Agents SDK, default, `gpt-5.5`), `gemini` (Google Gen AI SDK,
+`gemini-2.5-pro`), and `claude` (Anthropic SDK, `claude-opus-4-8`) — and each
+supports two auth modes: native credentials (`auth`) or an API key (`api`). The
+prompt and flow are identical across providers; only the underlying agent
+changes.
 
 ```text
 tests/screens/test_2.webp + "rectangle around the 'Site restructure' row labeled 'Latest annotation'"
@@ -96,7 +97,33 @@ export GOOGLE_CLOUD_LOCATION=us-central1   # optional, defaults to us-central1
 
 `GEMINI_MODEL` (default `gemini-2.5-pro`) selects the model. Newer models such
 as `gemini-3-pro-preview` also work — set `GEMINI_MODEL` or pass `--model`.
-`OPENAI_REASONING_EFFORT` is ignored by Gemini.
+`OPENAI_REASONING_EFFORT` is ignored by Gemini. Lite models
+(e.g. `gemini-3.1-flash-lite`) are **not** recommended: they tend to ignore the
+normalized-coordinate contract and return pixel values, which fail validation.
+
+### Claude (Anthropic)
+
+The Claude provider uses the official [Anthropic SDK](https://platform.claude.com)
+(`anthropic`) with the Messages API (vision + structured JSON via
+`output_config.format`, adaptive thinking on). Use an Anthropic API key:
+
+```bash
+export MARKER_PROVIDER=claude
+export MARKER_AUTH=api
+export ANTHROPIC_API_KEY=sk-ant-...   # CLAUDE_API_KEY also works
+```
+
+…or native auth via a Claude subscription bearer token:
+
+```bash
+export MARKER_PROVIDER=claude
+export MARKER_AUTH=auth
+export ANTHROPIC_AUTH_TOKEN=...        # CLAUDE_CODE_OAUTH_TOKEN also works
+```
+
+When `MARKER_AUTH=auth` and no token is set, the SDK falls back to a local
+`claude` / `ant` login profile. `CLAUDE_MODEL` (default `claude-opus-4-8`)
+selects the model, and `--reasoning-effort` maps to Claude's `effort`.
 
 ### Optional `.env`
 
@@ -151,9 +178,9 @@ $ jq '.annotations[0].bbox' result.json
 | `--output PATH` | `<image_dir>/<stem>_annotated.png` | Where to write the annotated PNG. Optional. |
 | `--query "..."` | — | A natural‑language annotation request. Repeatable. |
 | `--queries-file PATH` | — | A JSON array of query strings, or a saved annotation result JSON from `tests/annotations`. Combine with `--query` if you want. |
-| `--provider codex\|gemini` | `$MARKER_PROVIDER` or `codex` | Vision backend. `codex` = OpenAI Agents SDK; `gemini` = Google Gen AI SDK. |
-| `--model NAME` | provider default (`gpt-5.5` / `gemini-2.5-pro`) | Override the vision model for this run. Reads `$OPENAI_MODEL` / `$GEMINI_MODEL`. |
-| `--reasoning-effort minimal\|low\|medium\|high\|xhigh` | `$OPENAI_REASONING_EFFORT` or `medium` | Codex/OpenAI reasoning effort. Ignored by Gemini. |
+| `--provider codex\|gemini\|claude` | `$MARKER_PROVIDER` or `codex` | Vision backend. `codex` = OpenAI Agents SDK; `gemini` = Google Gen AI SDK; `claude` = Anthropic SDK. |
+| `--model NAME` | provider default (`gpt-5.5` / `gemini-2.5-pro` / `claude-opus-4-8`) | Override the vision model for this run. Reads `$OPENAI_MODEL` / `$GEMINI_MODEL` / `$CLAUDE_MODEL`. |
+| `--reasoning-effort minimal\|low\|medium\|high\|xhigh` | `$OPENAI_REASONING_EFFORT` or `medium` | Reasoning effort for Codex/OpenAI and Claude (maps to Claude's `effort`). Ignored by Gemini. |
 | `--auth auth\|api` | `$MARKER_AUTH` or provider default | `auth` uses native credentials (`codex login` / Vertex AI); `api` uses an API key. `codex` is accepted as a legacy alias for `auth`. |
 | `--color HEX` | `#DC2626` | Default annotation color. |
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
@@ -179,7 +206,7 @@ result = annotate(
         "rectangle around the payment timeline labeled 'Activity Log'",
     ],
     # all kwargs below are optional:
-    provider="codex",          # or "gemini"
+    provider="codex",          # or "gemini" / "claude"
     model=None,                 # defaults to the provider's model
     auth="auth",                # "auth" (native creds) or "api" (API key)
     reasoning_effort="medium",  # Codex/OpenAI only; ignored by Gemini
@@ -364,7 +391,8 @@ screenshot-marker/
 │   ├── __init__.py         # Public API: annotate()
 │   ├── vision.py           # Prompts, schemas, provider dispatch, Codex backend
 │   ├── providers/          # Vision backends (one per provider)
-│   │   └── gemini.py       # Google Gen AI SDK backend
+│   │   ├── gemini.py       # Google Gen AI SDK backend
+│   │   └── claude.py       # Anthropic SDK backend
 │   ├── parser.py           # JSON → typed annotations + sanity check
 │   ├── drawing.py          # Pillow rendering: outline, arrow, label, bg
 │   ├── models.py           # Pydantic schemas
@@ -386,8 +414,9 @@ screenshot-marker/
   precision because both passes process them at low detail. Upscale before
   feeding in if you need pixel‑perfect alignment.
 - Lower-capability or lower-effort settings are faster but can be noticeably
-  less precise. Use a capable "pro" model as the baseline for bbox quality —
-  `gpt-5.5` with `medium` effort for Codex, or `gemini-2.5-pro` for Gemini.
+  less precise. Use a capable model as the baseline for bbox quality —
+  `gpt-5.5` with `medium` effort for Codex, `gemini-2.5-pro` for Gemini, or
+  `claude-opus-4-8` for Claude. Avoid lite/flash-lite tiers for spatial work.
 - **Stroke width** is auto‑scaled with image size. Rectangle outlines render
   thinner than arrows/labels (`max(2.5, round(stroke × 0.45))`) so the box
   stays readable without overpowering the screenshot.
