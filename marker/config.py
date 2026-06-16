@@ -5,12 +5,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, cast
 
-_FALLBACK_MODEL = "gpt-5.5"
-_FALLBACK_AUTH_MODE = "codex"
-_FALLBACK_REASONING_EFFORT = "medium"
+# ---------------------------------------------------------------------------
+# Providers (vision backends)
+# ---------------------------------------------------------------------------
+# Each provider is a separate "agent SDK" backend that turns an image + prompt
+# into structured JSON. Codex uses the OpenAI Agents SDK; Gemini uses the
+# Google Gen AI SDK. New providers (e.g. Claude) plug in the same way.
+Provider = Literal["codex", "gemini"]
+PROVIDERS: tuple[Provider, ...] = ("codex", "gemini")
+_FALLBACK_PROVIDER: Provider = "codex"
 
-AuthMode = Literal["codex", "api"]
-AUTH_MODES: tuple[AuthMode, ...] = ("codex", "api")
+# ---------------------------------------------------------------------------
+# Auth modes (shared across every provider)
+# ---------------------------------------------------------------------------
+#   "auth" -> the provider's native, non-API-key credentials
+#               codex  : a local `codex login` (ChatGPT/Codex subscription)
+#               gemini : Vertex AI via Google Cloud Application Default Creds
+#   "api"  -> an explicit API key
+#               codex  : CODEX_API_KEY / OPENAI_API_KEY
+#               gemini : GEMINI_API_KEY / GOOGLE_API_KEY
+AuthMode = Literal["auth", "api"]
+AUTH_MODES: tuple[AuthMode, ...] = ("auth", "api")
+
+# Backwards compatibility: MARKER_AUTH=codex used to mean "Codex subscription
+# auth". It now maps onto the generic native "auth" mode.
+_AUTH_ALIASES: dict[str, AuthMode] = {"codex": "auth"}
+
+# A provider's native (non-API-key) auth is selected by any of these values.
+NATIVE_AUTH_MODES: tuple[str, ...] = ("auth",)
+
 ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "minimal",
@@ -19,6 +42,17 @@ REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "high",
     "xhigh",
 )
+
+_FALLBACK_REASONING_EFFORT: ReasoningEffort = "medium"
+
+# Per-provider model selection: env var to read and the fallback default.
+_MODEL_ENV: dict[Provider, str] = {"codex": "OPENAI_MODEL", "gemini": "GEMINI_MODEL"}
+_FALLBACK_MODEL: dict[Provider, str] = {"codex": "gpt-5.5", "gemini": "gemini-2.5-pro"}
+
+# Per-provider default auth mode when neither a flag nor MARKER_AUTH is set.
+# Codex defaults to its subscription login; Gemini defaults to an API key
+# (the common Google AI Studio path).
+_DEFAULT_AUTH: dict[Provider, AuthMode] = {"codex": "auth", "gemini": "api"}
 
 
 def load_env() -> None:
@@ -32,8 +66,11 @@ def load_env() -> None:
 
 load_env()
 
-DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", _FALLBACK_MODEL)
-DEFAULT_AUTH_MODE: AuthMode = "codex"
+DEFAULT_PROVIDER: Provider = _FALLBACK_PROVIDER
+# Default model for the default provider. Provider-specific resolution lives in
+# resolve_model(); this is kept for callers/tests that want a plain default.
+DEFAULT_MODEL = os.environ.get(_MODEL_ENV[DEFAULT_PROVIDER], _FALLBACK_MODEL[DEFAULT_PROVIDER])
+DEFAULT_AUTH_MODE: AuthMode = _DEFAULT_AUTH[DEFAULT_PROVIDER]
 DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium"
 DEFAULT_COLOR = "#DC2626"
 DEFAULT_FONT_CANDIDATES = [
@@ -48,6 +85,7 @@ DEFAULT_FONT_CANDIDATES = [
 
 @dataclass
 class RenderDefaults:
+    provider: Provider = DEFAULT_PROVIDER
     model: str = DEFAULT_MODEL
     auth: AuthMode = DEFAULT_AUTH_MODE
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
@@ -56,14 +94,46 @@ class RenderDefaults:
     font_path: Optional[str] = None
 
 
-def resolve_auth_mode(auth: str | None = None) -> AuthMode:
+def resolve_provider(provider: str | None = None) -> Provider:
     load_env()
-    value = auth if auth is not None else os.environ.get("MARKER_AUTH", _FALLBACK_AUTH_MODE)
+    value = provider if provider is not None else os.environ.get("MARKER_PROVIDER", _FALLBACK_PROVIDER)
     normalized = value.strip().lower()
+    if normalized not in PROVIDERS:
+        choices = ", ".join(PROVIDERS)
+        raise ValueError(f"Unsupported provider {value!r}. Expected one of: {choices}.")
+    return cast(Provider, normalized)
+
+
+def resolve_auth_mode(auth: str | None = None, provider: str | None = None) -> AuthMode:
+    load_env()
+    raw = auth if auth is not None else os.environ.get("MARKER_AUTH")
+    if raw is None:
+        # No explicit choice: fall back to the selected provider's default.
+        return _DEFAULT_AUTH[resolve_provider(provider)]
+    normalized = raw.strip().lower()
+    normalized = _AUTH_ALIASES.get(normalized, normalized)
     if normalized not in AUTH_MODES:
         choices = ", ".join(AUTH_MODES)
-        raise ValueError(f"Unsupported auth mode {value!r}. Expected one of: {choices}.")
+        raise ValueError(f"Unsupported auth mode {raw!r}. Expected one of: {choices}.")
     return cast(AuthMode, normalized)
+
+
+def is_native_auth(auth: str) -> bool:
+    """True when ``auth`` selects a provider's native (non-API-key) credentials."""
+    return _AUTH_ALIASES.get(auth, auth) in NATIVE_AUTH_MODES
+
+
+def resolve_model(model: str | None = None, provider: str | None = None) -> str:
+    load_env()
+    if model:
+        return model
+    prov = resolve_provider(provider)
+    return os.environ.get(_MODEL_ENV[prov], _FALLBACK_MODEL[prov])
+
+
+def default_model_for(provider: str | None = None) -> str:
+    """The default model for ``provider`` (env override or built-in fallback)."""
+    return resolve_model(None, provider)
 
 
 def resolve_reasoning_effort(effort: str | None = None) -> ReasoningEffort:
@@ -88,9 +158,40 @@ def get_codex_api_key(api_key: str | None = None) -> str:
     if not key:
         raise RuntimeError(
             "API auth requires CODEX_API_KEY or OPENAI_API_KEY. "
-            "For subscription auth, use MARKER_AUTH=codex and run `codex login`."
+            "For subscription auth, use MARKER_AUTH=auth and run `codex login`."
         )
     return key
+
+
+def get_gemini_api_key(api_key: str | None = None) -> str:
+    load_env()
+    key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "API auth requires GEMINI_API_KEY or GOOGLE_API_KEY. "
+            "For Vertex AI auth, use MARKER_AUTH=auth with GOOGLE_CLOUD_PROJECT set "
+            "and `gcloud auth application-default login`."
+        )
+    return key
+
+
+def get_api_key(provider: str, api_key: str | None = None) -> str:
+    """Resolve the API key for ``provider`` from the argument or environment."""
+    if resolve_provider(provider) == "gemini":
+        return get_gemini_api_key(api_key)
+    return get_codex_api_key(api_key)
+
+
+def get_vertex_config() -> tuple[Optional[str], str]:
+    """(project, location) for Gemini Vertex AI auth. Location defaults to us-central1."""
+    load_env()
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
+    location = (
+        os.environ.get("GOOGLE_CLOUD_LOCATION")
+        or os.environ.get("GOOGLE_CLOUD_REGION")
+        or "us-central1"
+    )
+    return project, location
 
 
 def auto_stroke_width(image_width: int, image_height: int) -> int:

@@ -34,18 +34,30 @@ RAW_RESPONSE = {
 
 
 class AuthConfigTests(unittest.TestCase):
-    def test_resolve_auth_defaults_to_codex(self) -> None:
+    def test_resolve_auth_defaults_to_native_auth(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
             os.environ, {}, clear=True
         ):
-            self.assertEqual(config.resolve_auth_mode(), "codex")
+            # Default provider is codex, whose default auth is native ("auth").
+            self.assertEqual(config.resolve_auth_mode(), "auth")
 
     def test_resolve_auth_uses_env_and_allows_explicit_override(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
             os.environ, {"MARKER_AUTH": "api"}, clear=True
         ):
             self.assertEqual(config.resolve_auth_mode(), "api")
-            self.assertEqual(config.resolve_auth_mode("codex"), "codex")
+            self.assertEqual(config.resolve_auth_mode("auth"), "auth")
+
+    def test_resolve_auth_codex_alias_maps_to_native_auth(self) -> None:
+        # Legacy MARKER_AUTH=codex keeps working and means native "auth".
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            self.assertEqual(config.resolve_auth_mode("codex"), "auth")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"MARKER_AUTH": "codex"}, clear=True
+        ):
+            self.assertEqual(config.resolve_auth_mode(), "auth")
 
     def test_resolve_auth_rejects_unknown_values(self) -> None:
         with patch("marker.config.load_env", lambda: None):
@@ -322,11 +334,11 @@ class AnnotateAuthTests(unittest.TestCase):
                     output_path=output_path,
                     queries=["box around main"],
                     refine=False,
-                    auth="codex",
+                    auth="auth",
                     reasoning_effort="medium",
                 )
 
-        self.assertEqual(call.call_args.kwargs["auth"], "codex")
+        self.assertEqual(call.call_args.kwargs["auth"], "auth")
         self.assertEqual(call.call_args.kwargs["reasoning_effort"], "medium")
 
     def test_steps_accepts_first_candidate_and_promotes_output(self) -> None:
@@ -396,6 +408,148 @@ class AnnotateAuthTests(unittest.TestCase):
             self.assertEqual(step.call_count, 1)
             self.assertEqual(result.annotations[0].bbox.x, 2)
             self.assertEqual(result.annotations[0].bbox.y, 3)
+
+
+class ProviderConfigTests(unittest.TestCase):
+    def test_resolve_provider_default_env_and_explicit(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            self.assertEqual(config.resolve_provider(), "codex")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"MARKER_PROVIDER": "gemini"}, clear=True
+        ):
+            self.assertEqual(config.resolve_provider(), "gemini")
+            self.assertEqual(config.resolve_provider("codex"), "codex")
+
+    def test_resolve_provider_rejects_unknown(self) -> None:
+        with patch("marker.config.load_env", lambda: None):
+            with self.assertRaisesRegex(ValueError, "Unsupported provider"):
+                config.resolve_provider("bogus")
+
+    def test_default_auth_is_provider_specific(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            self.assertEqual(config.resolve_auth_mode(provider="codex"), "auth")
+            self.assertEqual(config.resolve_auth_mode(provider="gemini"), "api")
+
+    def test_resolve_model_per_provider(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            self.assertEqual(config.resolve_model(None, "codex"), "gpt-5.5")
+            self.assertEqual(config.resolve_model(None, "gemini"), "gemini-2.5-pro")
+            self.assertEqual(config.resolve_model("custom-model", "gemini"), "custom-model")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"GEMINI_MODEL": "gemini-x", "OPENAI_MODEL": "gpt-x"}, clear=True
+        ):
+            self.assertEqual(config.resolve_model(None, "gemini"), "gemini-x")
+            self.assertEqual(config.resolve_model(None, "codex"), "gpt-x")
+
+    def test_get_gemini_api_key_accepts_either_env(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"GEMINI_API_KEY": "g-key"}, clear=True
+        ):
+            self.assertEqual(config.get_gemini_api_key(), "g-key")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"GOOGLE_API_KEY": "google-key"}, clear=True
+        ):
+            self.assertEqual(config.get_gemini_api_key(), "google-key")
+
+    def test_get_gemini_api_key_missing_raises(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY or GOOGLE_API_KEY"):
+                config.get_gemini_api_key()
+
+    def test_cli_accepts_provider_and_model_flags(self) -> None:
+        args = cli._parse_args(
+            [
+                "--image",
+                "tests/screens/test_1.jpeg",
+                "--query",
+                "box around main",
+                "--provider",
+                "gemini",
+                "--model",
+                "gemini-2.5-pro",
+                "--auth",
+                "api",
+            ]
+        )
+        self.assertEqual(args.provider, "gemini")
+        self.assertEqual(args.model, "gemini-2.5-pro")
+        self.assertEqual(args.auth, "api")
+
+
+class GeminiProviderTests(unittest.TestCase):
+    def test_call_vision_routes_to_gemini_backend(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_call_json(**kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return RAW_RESPONSE
+
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            Image.new("RGB", (2, 2), "white").save(image_file.name)
+            with patch(
+                "marker.providers.gemini.call_json", side_effect=fake_call_json
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
+                os.environ, {"GEMINI_API_KEY": "g-key"}, clear=True
+            ):
+                result = vision.call_vision(
+                    image_file.name,
+                    100,
+                    50,
+                    ["box around main"],
+                    "gemini-2.5-pro",
+                    provider="gemini",
+                    auth="api",
+                )
+
+        self.assertEqual(result, RAW_RESPONSE)
+        self.assertEqual(captured["model"], "gemini-2.5-pro")
+        self.assertEqual(captured["auth"], "api")
+        self.assertIs(captured["output_schema"], vision.RESPONSE_SCHEMA)
+        self.assertEqual(captured["system_prompt"], vision.SYSTEM_PROMPT)
+
+    def test_json_schema_transforms_to_valid_genai_schema(self) -> None:
+        try:
+            from google.genai import types
+        except ImportError:
+            self.skipTest("google-genai not installed")
+        from marker.providers.gemini import _to_genai_schema
+
+        schema = _to_genai_schema(vision.RESPONSE_SCHEMA, types)
+        self.assertEqual(schema.type, types.Type.OBJECT)
+        annotation_items = schema.properties["annotations"].items
+        self.assertEqual(annotation_items.type, types.Type.OBJECT)
+        # bbox is expressed as ["object", "null"] -> a nullable OBJECT schema.
+        bbox_schema = annotation_items.properties["bbox"]
+        self.assertEqual(bbox_schema.type, types.Type.OBJECT)
+        self.assertTrue(bbox_schema.nullable)
+
+    def test_vertex_auth_without_project_raises(self) -> None:
+        try:
+            import google.genai  # noqa: F401
+        except ImportError:
+            self.skipTest("google-genai not installed")
+        from marker.providers import gemini
+
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Vertex AI"):
+                gemini.call_json(
+                    image_paths=["tests/screens/test_1.jpeg"],
+                    system_prompt="sys",
+                    user_text="user",
+                    model="gemini-2.5-pro",
+                    output_schema=vision.RESPONSE_SCHEMA,
+                    auth="auth",
+                )
 
 
 def _fake_codex_classes(captured: dict[str, object], final_response: str) -> tuple[type, type, type]:
