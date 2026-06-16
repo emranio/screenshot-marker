@@ -7,11 +7,18 @@
       "target_description": "Customer Information card in the right column",
       "label_text": "Customer Details",
       "bbox": {
-        "x": 2641,
+        "x": 2640,
         "y": 1866,
-        "width": 1951,
-        "height": 933
+        "width": 1953,
+        "height": 930
       },
+      "label_position": {
+        "x": 2644,
+        "y": 1564,
+        "width": 691,
+        "height": 205
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -23,10 +30,17 @@
       "label_text": "Activity Log",
       "bbox": {
         "x": 632,
-        "y": 5555,
-        "width": 1948,
-        "height": 2033
+        "y": 5567,
+        "width": 1947,
+        "height": 2114
       },
+      "label_position": {
+        "x": 629,
+        "y": 5330,
+        "width": 548,
+        "height": 205
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

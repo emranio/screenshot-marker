@@ -119,6 +119,8 @@ $ jq '.annotations[0].bbox' result.json
 | `--font PATH` | system default | Path to a TrueType font file. |
 | `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
 | `--steps` | off | After the first render, ask a validator/corrector step to inspect the drawn image plus full JSON. If needed, it returns corrected pixel bboxes and the renderer redraws once. Slower. |
+| `--crop` | off | After annotating, ask the model for a focus region around the drawn annotations **plus the related, important surrounding visuals** (the card/panel/section/headers they belong to) and crop the output PNG to it. The crop is unioned with every drawn box/label and padded generously, so it never clips an annotation and never looks tight. One extra LLM call. |
+| `--no-arrow` | off | Never draw arrows. Arrows are on by default for any labeled annotation that sits apart from its target; this flag suppresses them all. The model does not decide arrows. |
 | `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
 
 ---
@@ -144,6 +146,9 @@ result = annotate(
     font_path=None,
     refine=True,
     refine_padding=0.15,
+    crop=False,
+    crop_padding=0.12,
+    draw_arrows=True,
     steps=False,
 )
 
@@ -168,7 +173,6 @@ The Python API and the CLI both yield the same JSON structure:
       "label_text": "Customer Details",
       "bbox": { "x": 1247, "y": 412, "width": 1180, "height": 320 },
       "label_position": { "x": 1247, "y": 792, "width": 350, "height": 72 },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -180,7 +184,6 @@ The Python API and the CLI both yield the same JSON structure:
       "label_text": null,
       "bbox": null,
       "label_position": null,
-      "show_arrow": false,
       "color": null,
       "not_found": true,                                 // ← safety
       "notes": "No 'export' button is visible in this screenshot."
@@ -281,14 +284,23 @@ Tips:
   image area, that's the typical "I have no idea, here's the whole
   thing" hallucination. The parser converts it to `not_found` so nothing
   gets drawn.
+- **Focus crop** (`--crop`) — after rendering, the model returns a focus
+  rectangle framing the drawn annotations **and the related, important visuals
+  around them** (the card/panel/section/headers they belong to), so the crop
+  still makes sense on its own. Python unions that rectangle with every drawn
+  box and label (so a stray model answer can never clip an annotation), pads it
+  by `crop_padding` plus a pixel floor on every side, then crops the output PNG.
+  The result trims dead margins off tall screenshots without ever hugging the
+  boxes. If nothing resolved, the full image is kept.
 - **Model-guided label placement** — when a caption is requested, the model
   returns a `label_position` rectangle near the target that avoids important UI
   content. Older JSON without this field still renders through the fallback
   auto-layout.
 - **Arrows on by default** — a labeled box gets a procedural arrow from the
   capsule edge to the nearest bbox edge whenever the label sits apart from the
-  target with any visible gap. The arrow is suppressed only when `show_arrow`
-  is explicitly `false` or the capsule physically overlaps / sits flush against
+  target with any visible gap. The model never decides this; arrows are a pure
+  render-time behavior. They are suppressed only when you pass `--no-arrow`
+  (`draw_arrows=False`) or the capsule physically overlaps / sits flush against
   the box (where a pointer would be redundant).
 - **Procedural arrows** — arrows are drawn on demand from start/end geometry
   using a quadratic Bezier curve and an open stroked arrowhead. The curve,

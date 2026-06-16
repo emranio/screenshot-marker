@@ -40,7 +40,6 @@ _ANNOTATION_SCHEMA = {
         "label_text": {"type": ["string", "null"]},
         "bbox": _NORMALIZED_BBOX_SCHEMA,
         "label_position": _NORMALIZED_BBOX_SCHEMA,
-        "show_arrow": {"type": ["boolean", "null"]},
         "color": {"type": ["string", "null"]},
         "not_found": {"type": "boolean"},
         "notes": {"type": "string"},
@@ -52,7 +51,6 @@ _ANNOTATION_SCHEMA = {
         "label_text",
         "bbox",
         "label_position",
-        "show_arrow",
         "color",
         "not_found",
         "notes",
@@ -81,7 +79,6 @@ _PIXEL_ANNOTATION_SCHEMA = {
         "label_text": {"type": ["string", "null"]},
         "bbox": _PIXEL_BBOX_SCHEMA,
         "label_position": _PIXEL_BBOX_SCHEMA,
-        "show_arrow": {"type": ["boolean", "null"]},
         "color": {"type": ["string", "null"]},
         "not_found": {"type": "boolean"},
         "notes": {"type": "string"},
@@ -93,7 +90,6 @@ _PIXEL_ANNOTATION_SCHEMA = {
         "label_text",
         "bbox",
         "label_position",
-        "show_arrow",
         "color",
         "not_found",
         "notes",
@@ -118,8 +114,8 @@ SYSTEM_PROMPT = """You are a UI screenshot annotation assistant.
 
 For each annotation request you receive, locate the target UI element in the
 screenshot and return its bounding box. When a label is requested, also choose
-a safe label position that avoids important UI content and decide whether an
-arrow is necessary.
+a safe label position that avoids important UI content. You do NOT decide
+arrows — the renderer draws them automatically.
 
 ============================================================
 OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
@@ -151,9 +147,8 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    Keep it under ~40 characters when possible.
 7. not_found = true is the CORRECT answer whenever the target is missing,
    ambiguous, or you are not confident you can locate it precisely. In that
-   case set bbox = null, label_position = null, show_arrow = false, and put a
-   one-line reason in notes
-   (e.g., "no element matching 'export button' is visible").
+   case set bbox = null, label_position = null, and put a one-line reason in
+   notes (e.g., "no element matching 'export button' is visible").
    DO NOT GUESS. DO NOT return a near-full-image bbox as a placeholder.
    DO NOT pick the closest-looking element. An empty annotation is far better
    than a wrong one. Renderer will skip not_found items, so they cost
@@ -167,12 +162,15 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
          width/height, NOT the target bbox. Do not cover the requested target,
          primary buttons, form fields, menus, headings, readable body text,
          icons the user needs to inspect, or another annotation label.
-   PLACE THE LABEL AS CLOSE TO THE BBOX AS POSSIBLE. The label capsule should
-   sit immediately adjacent to the target's nearest edge — directly above,
-   below, left, or right of the bbox — separated by only a tiny gap (aim for
-   ~1-2% of the image dimension, just enough that the capsule does not overlap
-   the bbox border). Treat the smallest gap that still avoids overlap as the
-   goal.
+   PLACE THE LABEL NEAR THE BBOX, AT A MEANINGFUL, READABLE DISTANCE — close
+   enough that it clearly belongs to the target, but NOT glued to the border.
+   The label capsule should sit just off the target's nearest edge — directly
+   above, below, left, or right of the bbox — separated by a small, clear gap
+   (aim for ~3-5% of the image dimension): enough open space that the capsule
+   does not touch the bbox border and a short connector arrow between them reads
+   cleanly. Do NOT cram the capsule against the box (no hairline or overlapping
+   gap), and do NOT float it far away. A comfortable, deliberate gap is the
+   goal, not the smallest possible one.
    Pick the edge that has free whitespace nearest the target: check
    above/below/left/right of the bbox in that priority order and use the FIRST
    side that has room for the capsule without covering other important content.
@@ -182,17 +180,10 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    nearness to the bbox beats roominess. Only move the label one capsule-width
    further out (still on the nearest viable side) if every immediately-adjacent
    side would overlap protected content.
-9. show_arrow — arrows are ON BY DEFAULT for labeled annotations:
-     (a) false when label_text is null.
-     (b) false ONLY when the label_position capsule physically overlaps or sits
-         flush against the bbox (touching it, with no visible gap) so the
-         association is unmistakable without a pointer.
-     (c) true in EVERY other case — i.e. whenever the label sits in its own
-         space with any visible gap from the target, however small. A normal
-         "small clear gap" placement still gets an arrow.
-   When in doubt, prefer true. Only a label glued directly onto the box edge
-   should set false.
-10. notes is always a string — use "" when not_found is false and you have
+   Arrows are added automatically by the renderer (on by default whenever a
+   label sits apart from its target). Do NOT reason about arrows — there is no
+   arrow field to return.
+9. notes is always a string — use "" when not_found is false and you have
    nothing to add.
 
 ============================================================
@@ -258,7 +249,6 @@ Correct response:
       "label_text": "Customer Details",
       "bbox": {"x": 0.52, "y": 0.18, "width": 0.42, "height": 0.12},
       "label_position": {"x": 0.52, "y": 0.34, "width": 0.16, "height": 0.04},
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -266,10 +256,9 @@ Correct response:
   ]
 }
 
-Notice: the label sits below the card with a visible gap, so show_arrow is
-true (the default for a labeled box) — only set it false when the capsule is
-flush against the bbox. label_text is the quoted phrase only, not the whole
-sentence. color
+Notice: the label sits below the card with a visible gap; the renderer adds the
+arrow automatically — you return no arrow field. label_text is the quoted phrase
+only, not the whole sentence. color
 is null (request said "red" generically, which is the default — only return
 a hex string when the user names a non-default color like "blue card" or
 "green box"). All required fields are present. JSON only, no prose.
@@ -541,6 +530,108 @@ def refine_bbox_call(
         return None
 
 
+CROP_SYSTEM_PROMPT = """You are choosing a CROP RECTANGLE for an annotated UI
+screenshot.
+
+The image already has annotation boxes, labels, and optional arrows drawn on it.
+Your job is to return ONE rectangle that frames all of the annotated content so
+the final image can be cropped down to the region that matters — dropping the
+irrelevant top/bottom/side margins of a tall or wide screenshot.
+
+OUTPUT FORMAT — FOLLOW EXACTLY:
+
+1. Return JSON ONLY. No prose, no markdown, no code fences.
+2. Schema:
+     {"x": <number>, "y": <number>, "width": <number>, "height": <number>}
+   All four fields required. No extra fields.
+3. Coordinates are NORMALIZED floats in [0.0, 1.0] of the FULL image. (0, 0) is
+   the top-left, (1, 1) is the bottom-right. width and height must be > 0.
+
+RULES:
+
+- The rectangle MUST fully contain every drawn annotation box, its label
+  capsule, and any arrow. NEVER clip a drawn element — when unsure, include
+  more.
+- The rectangle MUST also include all the RELATED and IMPORTANT visuals around
+  the annotations — the surrounding UI that gives them meaning. Include the
+  whole card / panel / section / table / form the annotation sits in, its
+  header or title, the column or row headers needed to read it, and any nearby
+  element the annotation refers to or depends on. The crop must still make sense
+  on its own once the rest of the screenshot is gone.
+- Do NOT crop tightly. Leave comfortable breathing room on EVERY side so the
+  result does not look cramped: keep a band of surrounding UI / whitespace
+  around the outermost annotation, not a rectangle hugging the boxes.
+- When in doubt between a smaller and a larger rectangle, choose the LARGER one
+  — losing context is worse than keeping a little extra.
+- If the annotations (or the context they need) are spread across most of the
+  image, just return the whole image: {"x": 0, "y": 0, "width": 1, "height": 1}."""
+
+
+def _coerce_normalized_bbox(raw: dict[str, Any]) -> NormalizedBbox | None:
+    try:
+        x = float(raw["x"])
+        y = float(raw["y"])
+        w = float(raw["width"])
+        h = float(raw["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    w = min(max(w, 0.0), 1.0 - x)
+    h = min(max(h, 0.0), 1.0 - y)
+    if w <= 0 or h <= 0:
+        return None
+    return NormalizedBbox(x=x, y=y, width=w, height=h)
+
+
+def determine_crop_region(
+    image_path: str | Path,
+    annotations_summary: str,
+    width: int,
+    height: int,
+    model: str,
+    *,
+    auth: str | None = None,
+    api_key: str | None = None,
+    reasoning_effort: str | None = None,
+) -> NormalizedBbox | None:
+    """Ask the model for a focus rectangle framing all drawn annotations.
+
+    Returns a normalized crop rectangle, or ``None`` if the model could not be
+    reached or returned an unusable answer (the caller then falls back to the
+    union of the drawn annotation rects).
+    """
+    resolved_auth = resolve_auth_mode(auth)
+    resolved_effort = resolve_reasoning_effort(reasoning_effort)
+    user_text = "\n".join(
+        [
+            f"Image dimensions: {width}px wide x {height}px tall.",
+            "",
+            "Annotated regions already drawn on the image (absolute pixels):",
+            annotations_summary,
+            "",
+            "Return ONE normalized crop rectangle that frames all annotated "
+            "content AND the related, important surrounding visuals (the card / "
+            "panel / section / headers the annotations belong to), with "
+            "comfortable margin on every side.",
+        ]
+    )
+    try:
+        raw = _call_codex_json(
+            image_paths=[image_path],
+            system_prompt=CROP_SYSTEM_PROMPT,
+            user_text=user_text,
+            model=model,
+            output_schema=_REFINE_RESPONSE_SCHEMA,
+            auth=resolved_auth,
+            api_key=api_key,
+            reasoning_effort=resolved_effort,
+        )
+    except Exception:
+        return None
+    return _coerce_normalized_bbox(raw)
+
+
 _STEP_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -563,28 +654,33 @@ and optional arrows drawn from the JSON's absolute pixel coordinates.
 
 Your job is not to write feedback for another marker pass. Your job is to
 decide whether the current JSON can be accepted or to directly correct the
-bbox, label_position, or show_arrow values yourself so the renderer can redraw
-the image immediately.
+bbox and label_position values yourself so the renderer can redraw the image
+immediately.
 
 Return JSON only.
+
+Arrows are NOT your concern — the renderer draws them automatically (on by
+default whenever a label sits apart from its target). There is no arrow field
+to return; do not reason about arrows.
 
 Decision rules:
 
 - Return decision="accept" only when every requested target is correctly
-  identified, each bbox is anchored to the target's visual edges, each label is
-  in a clear position, and arrows are used only when helpful.
+  identified, each bbox is anchored to the target's visual edges, and each label
+  is in a clear position.
 - Return decision="redraw" when any bbox is shifted, floating in whitespace,
   attached to a nearby label instead of the requested target, missing an edge,
   too tight, too loose, or covering a neighboring row/card/control.
 - Return decision="redraw" when a label covers important UI content, covers its
-  own target, overlaps another label, uses an arrow even though the capsule is
-  flush against the target, or omits an arrow even though the label sits apart
-  from the target with a visible gap.
+  own target, or overlaps another label.
 - Return decision="redraw" when a label sits farther from its target than
   necessary — in distant whitespace, a far corner, or the page margin — while a
-  nearer edge of the bbox had room. When correcting, MOVE the label_position so
-  the capsule sits immediately adjacent to the target's nearest free edge with
-  only a tiny gap (just enough to clear the bbox border). Closeness to the bbox
+  nearer edge of the bbox had room. Also redraw when a label is crammed against
+  the box (touching it or with only a hairline gap); it should have a small,
+  clear gap instead. When correcting, MOVE the label_position so the capsule
+  sits just off the target's nearest free edge at a meaningful but modest
+  distance — a small, clear gap (roughly 3-5% of the image dimension), not glued
+  to the border and not parked in distant whitespace. Nearness to the bbox
   takes priority over picking the emptiest region.
 
 Annotation correction rules:
@@ -596,13 +692,11 @@ Annotation correction rules:
   system, not normalized floats.
 - bbox is {x, y, width, height}. x/y are top-left. width/height are positive.
 - label_position is null when label_text is null. Otherwise it is the desired
-  label capsule rectangle in absolute pixels. Put it as close to the target as
-  possible — immediately adjacent to the bbox's nearest free edge with only a
-  tiny gap — not on important controls, readable text, icons, headings, the
-  target itself, or another label. Do not park it in distant whitespace.
-- show_arrow defaults to true for labeled annotations. Set it false only when
-  label_text is null or the label capsule physically overlaps / sits flush
-  against the bbox. Any visible gap between label and target keeps it true.
+  label capsule rectangle in absolute pixels. Put it near the target — just off
+  the bbox's nearest free edge with a small, clear gap (a meaningful but modest
+  distance, not glued to the border) — not on important controls, readable text,
+  icons, headings, the target itself, or another label. Do not park it in
+  distant whitespace.
 - Clamp all coordinates inside the image dimensions supplied in the prompt.
 - For bordered elements, align to the visible border stroke.
 - For rows/lists, include the whole row from separator to separator and the full

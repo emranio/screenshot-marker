@@ -4,29 +4,43 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the gray subtitle text that begins 'All of your API keys and credentials are stored here', label 'One home for all AI keys'",
-      "target_description": "Gray subtitle text beneath the Connectors page heading",
+      "target_description": "Gray subtitle under the Connectors heading beginning with 'All of your API keys and credentials are stored here'",
       "label_text": "One home for all AI keys",
       "bbox": {
-        "x": 183,
-        "y": 78,
-        "width": 697,
-        "height": 24
+        "x": 188,
+        "y": 85,
+        "width": 721,
+        "height": 15
       },
+      "label_position": {
+        "x": 184,
+        "y": 116,
+        "width": 262,
+        "height": 33
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
-      "notes": "Expanded to include the full subtitle line and natural line height."
+      "notes": ""
     },
     {
       "request_index": 1,
       "request_text": "red box with an arrow on the blue 'Install the AI plugin' button inside the pink banner near the top, label 'Install the AI plugin'",
-      "target_description": "Blue Install the AI plugin button inside the pink promotional banner",
+      "target_description": "Blue 'Install the AI plugin' button inside the pink banner near the top of the page",
       "label_text": "Install the AI plugin",
       "bbox": {
         "x": 504,
-        "y": 227,
-        "width": 142,
-        "height": 32
+        "y": 229,
+        "width": 144,
+        "height": 38
       },
+      "label_position": {
+        "x": 665,
+        "y": 227,
+        "width": 222,
+        "height": 33
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -34,14 +48,21 @@
     {
       "request_index": 2,
       "request_text": "draw a rectangle around the group of three provider rows titled 'Anthropic', 'Google', and 'OpenAI', each with an 'Install' button on the right, label 'Connect a provider'",
-      "target_description": "Group of three provider cards for Anthropic, Google, and OpenAI",
+      "target_description": "Group of three provider rows for Anthropic, Google, and OpenAI with Install buttons on the right",
       "label_text": "Connect a provider",
       "bbox": {
-        "x": 479,
-        "y": 295,
-        "width": 627,
-        "height": 270
+        "x": 486,
+        "y": 296,
+        "width": 665,
+        "height": 229
       },
+      "label_position": {
+        "x": 480,
+        "y": 579,
+        "width": 210,
+        "height": 33
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

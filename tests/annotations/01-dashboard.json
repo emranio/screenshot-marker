@@ -4,14 +4,21 @@
     {
       "request_index": 0,
       "request_text": "rectangle with an arrow pointing to the underlined link 'Learn more about the 7.0 version' under the big 'Welcome to WordPress!' heading, label 'Step 1: Confirm WordPress 7.0'",
-      "target_description": "Underlined link below the Welcome to WordPress heading",
+      "target_description": "Underlined “Learn more about the 7.0 version.” link in the Welcome to WordPress banner",
       "label_text": "Step 1: Confirm WordPress 7.0",
       "bbox": {
-        "x": 230,
-        "y": 223,
-        "width": 285,
-        "height": 19
+        "x": 229,
+        "y": 224,
+        "width": 293,
+        "height": 17
       },
+      "label_position": {
+        "x": 230,
+        "y": 254,
+        "width": 340,
+        "height": 36
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -19,14 +26,21 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the line 'WordPress 7.0 running Twenty Twenty-Five theme' inside the 'At a Glance' box, label 'Version confirmed'",
-      "target_description": "Version/theme line in the At a Glance dashboard widget",
+      "target_description": "WordPress version/theme line at the bottom of the At a Glance dashboard widget",
       "label_text": "Version confirmed",
       "bbox": {
-        "x": 193,
-        "y": 846,
-        "width": 315,
-        "height": 23
+        "x": 197,
+        "y": 839,
+        "width": 306,
+        "height": 34
       },
+      "label_position": {
+        "x": 497,
+        "y": 838,
+        "width": 204,
+        "height": 36
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

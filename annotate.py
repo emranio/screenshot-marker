@@ -76,6 +76,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip the per-bbox refinement pass (faster, less accurate).",
     )
     p.add_argument(
+        "--crop",
+        action="store_true",
+        help=(
+            "After annotating, ask the model for a focus region around the "
+            "drawn annotations and crop the output PNG to it (with margin)."
+        ),
+    )
+    p.add_argument(
+        "--no-arrow",
+        action="store_true",
+        help="Never draw arrows. Arrows are drawn by default for labeled annotations.",
+    )
+    p.add_argument(
         "--steps",
         action="store_true",
         help="Run the validator/correction step after the first render and redraw if needed.",
@@ -124,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         stroke_width=args.stroke,
         font_path=args.font,
         refine=not args.no_refine,
+        crop=args.crop,
+        draw_arrows=not args.no_arrow,
         steps=args.steps,
     )
 

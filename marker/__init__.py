@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -27,6 +28,7 @@ from .models import (
 from .parser import parse_response
 from .vision import (
     call_vision,
+    determine_crop_region,
     image_size,
     refine_bbox_call,
     run_annotation_step,
@@ -55,6 +57,9 @@ def annotate(
     font_path: Optional[str] = None,
     refine: bool = True,
     refine_padding: float = 0.15,
+    crop: bool = False,
+    crop_padding: float = 0.12,
+    draw_arrows: bool = True,
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
@@ -76,6 +81,11 @@ def annotate(
 
     Returns an :class:`AnnotationResult` with the resolved annotations, the
     output path, and the list of queries the model could not locate.
+
+    When ``crop`` is True, a final vision call picks a focus rectangle around the
+    drawn annotations and the rendered PNG is cropped down to it (with
+    ``crop_padding`` margin so the result is never tight). Annotation coordinates
+    in the returned result stay in the original image's coordinate space.
     """
     if not queries:
         raise ValueError("queries must contain at least one annotation request.")
@@ -86,7 +96,7 @@ def annotate(
     output_path = Path(output_path) if output_path is not None else _default_output_path(image_path)
 
     if steps:
-        return _annotate_with_steps(
+        result = _annotate_with_steps(
             image_path=image_path,
             queries=queries,
             output_path=output_path,
@@ -96,25 +106,39 @@ def annotate(
             font_path=font_path,
             refine=refine,
             refine_padding=refine_padding,
+            draw_arrows=draw_arrows,
+            auth=resolved_auth,
+            api_key=api_key,
+            reasoning_effort=resolved_effort,
+        )
+    else:
+        result = _annotate_once(
+            image_path=image_path,
+            queries=queries,
+            output_path=output_path,
+            model=model,
+            color=color,
+            stroke_width=stroke_width,
+            font_path=font_path,
+            refine=refine,
+            refine_padding=refine_padding,
+            draw_arrows=draw_arrows,
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
         )
 
-    return _annotate_once(
-        image_path=image_path,
-        queries=queries,
-        output_path=output_path,
-        model=model,
-        color=color,
-        stroke_width=stroke_width,
-        font_path=font_path,
-        refine=refine,
-        refine_padding=refine_padding,
-        auth=resolved_auth,
-        api_key=api_key,
-        reasoning_effort=resolved_effort,
-    )
+    if crop:
+        _apply_crop(
+            result,
+            crop_padding=crop_padding,
+            model=model,
+            auth=resolved_auth,
+            api_key=api_key,
+            reasoning_effort=resolved_effort,
+        )
+
+    return result
 
 
 def _annotate_once(
@@ -128,6 +152,7 @@ def _annotate_once(
     font_path: Optional[str],
     refine: bool,
     refine_padding: float,
+    draw_arrows: bool,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -167,6 +192,7 @@ def _annotate_once(
             default_color=color,
             stroke_width=stroke,
             font_path=font,
+            draw_arrows=draw_arrows,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +216,7 @@ def _annotate_with_steps(
     font_path: Optional[str],
     refine: bool,
     refine_padding: float,
+    draw_arrows: bool,
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
@@ -213,6 +240,7 @@ def _annotate_with_steps(
             font_path=font_path,
             refine=refine,
             refine_padding=refine_padding,
+            draw_arrows=draw_arrows,
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
@@ -239,6 +267,7 @@ def _annotate_with_steps(
             color=color,
             stroke_width=stroke_width,
             font_path=font_path,
+            draw_arrows=draw_arrows,
         )
         return corrected.model_copy(update={"output_path": output_path})
 
@@ -264,6 +293,7 @@ def _render_result(
     color: str,
     stroke_width: Optional[int],
     font_path: Optional[str],
+    draw_arrows: bool = True,
 ) -> None:
     width, height = image_size(image_path)
     stroke = stroke_width if stroke_width is not None else auto_stroke_width(width, height)
@@ -275,6 +305,7 @@ def _render_result(
             default_color=color,
             stroke_width=stroke,
             font_path=font,
+            draw_arrows=draw_arrows,
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     annotated.save(output_path, format="PNG")
@@ -415,3 +446,111 @@ def _refine_bboxes(
                 annotations,
             )
         )
+
+
+def _annotation_rects(annotation: Annotation) -> list[tuple[float, float, float, float]]:
+    """Drawn rectangles (bbox + label capsule) for one resolved annotation."""
+    rects: list[tuple[float, float, float, float]] = []
+    if annotation.not_found:
+        return rects
+    if annotation.bbox is not None:
+        b = annotation.bbox
+        rects.append((b.x, b.y, b.x + b.width, b.y + b.height))
+    if annotation.label_position is not None:
+        lp = annotation.label_position
+        rects.append((lp.x, lp.y, lp.x + lp.width, lp.y + lp.height))
+    return rects
+
+
+def _union_rects(
+    rects: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float]:
+    return (
+        min(r[0] for r in rects),
+        min(r[1] for r in rects),
+        max(r[2] for r in rects),
+        max(r[3] for r in rects),
+    )
+
+
+def _pad_and_clamp(
+    rect: tuple[float, float, float, float],
+    img_w: int,
+    img_h: int,
+    padding: float,
+) -> tuple[int, int, int, int]:
+    """Grow ``rect`` by ``padding`` (and a minimum) on every side, clamped to image."""
+    x0, y0, x1, y1 = rect
+    pad_x = max(round((x1 - x0) * padding), round(img_w * 0.03), 24)
+    pad_y = max(round((y1 - y0) * padding), round(img_h * 0.03), 24)
+    nx0 = max(0, int(math.floor(x0 - pad_x)))
+    ny0 = max(0, int(math.floor(y0 - pad_y)))
+    nx1 = min(img_w, int(math.ceil(x1 + pad_x)))
+    ny1 = min(img_h, int(math.ceil(y1 + pad_y)))
+    if nx1 <= nx0:
+        nx1 = min(img_w, nx0 + 1)
+    if ny1 <= ny0:
+        ny1 = min(img_h, ny0 + 1)
+    return nx0, ny0, nx1, ny1
+
+
+def _crop_annotations_summary(annotations: list[Annotation]) -> str:
+    lines: list[str] = []
+    for ann in annotations:
+        if ann.not_found or ann.bbox is None:
+            continue
+        b = ann.bbox
+        label = f" label={ann.label_text!r}" if ann.label_text else ""
+        lines.append(f"- box at x={b.x}, y={b.y}, w={b.width}, h={b.height}{label}")
+    return "\n".join(lines) if lines else "(no resolved annotations)"
+
+
+def _apply_crop(
+    result: AnnotationResult,
+    *,
+    crop_padding: float,
+    model: str,
+    auth: AuthMode,
+    api_key: str | None,
+    reasoning_effort: str,
+) -> None:
+    """Crop the rendered output to a model-chosen focus region around the drawn
+    annotations, padded so it never looks tight. No-op when nothing was drawn."""
+    output_path = Path(result.output_path)
+    if not output_path.is_file():
+        return
+
+    drawn = [rect for ann in result.annotations for rect in _annotation_rects(ann)]
+    if not drawn:
+        # Nothing resolved → nothing to focus on; leave the full image as-is.
+        return
+
+    with Image.open(output_path) as rendered:
+        img_w, img_h = rendered.size
+        content = _union_rects(drawn)
+
+        region = determine_crop_region(
+            output_path,
+            _crop_annotations_summary(result.annotations),
+            img_w,
+            img_h,
+            model,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+        )
+        if region is not None:
+            agent_rect = (
+                region.x * img_w,
+                region.y * img_h,
+                (region.x + region.width) * img_w,
+                (region.y + region.height) * img_h,
+            )
+            # Union with the drawn content so the agent region can never clip a box.
+            content = _union_rects([content, agent_rect])
+
+        box = _pad_and_clamp(content, img_w, img_h, crop_padding)
+        if box == (0, 0, img_w, img_h):
+            return
+        cropped = rendered.crop(box)
+        cropped.save(output_path, format="PNG")

@@ -4,32 +4,46 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the 'Site restructure' row labeled 'Latest annotation'",
-      "target_description": "First annotation list row titled 'Site restructure'",
+      "target_description": "The first annotation list row titled Site restructure",
       "label_text": "Latest annotation",
       "bbox": {
-        "x": 31,
-        "y": 227,
-        "width": 2497,
-        "height": 270
+        "x": 33,
+        "y": 228,
+        "width": 2494,
+        "height": 186
       },
+      "label_position": {
+        "x": 52,
+        "y": 170,
+        "width": 412,
+        "height": 51
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
-      "notes": "Expanded to include the full first row from its top edge through the separator below the row."
+      "notes": ""
     },
     {
       "request_index": 1,
       "request_text": "rectangle around the Annotations tab labeled 'Active tab'",
-      "target_description": "Top navigation Annotations tab",
+      "target_description": "The active Annotations tab in the top navigation",
       "label_text": "Active tab",
       "bbox": {
-        "x": 201,
-        "y": 104,
-        "width": 186,
-        "height": 76
+        "x": 184,
+        "y": 116,
+        "width": 151,
+        "height": 33
       },
+      "label_position": {
+        "x": 200,
+        "y": 41,
+        "width": 244,
+        "height": 51
+      },
+      "show_arrow": true,
       "color": null,
       "not_found": false,
-      "notes": "Expanded from the text-only box to the full tab control including padding and active underline."
+      "notes": ""
     }
   ],
   "unresolved": []

@@ -728,12 +728,13 @@ def _label_touches_bbox(
 def _should_draw_arrow(
     label_rect: tuple[float, float, float, float],
     bbox: Bbox,
-    show_arrow: Optional[bool],
+    draw_arrows: bool,
     stroke: int,
 ) -> bool:
-    # Arrows are on by default for labeled annotations. Only an explicit
-    # show_arrow=False or a label glued to the box suppresses them.
-    if show_arrow is False:
+    # Arrows are on by default for labeled annotations. Disabled globally via
+    # draw_arrows=False (the --no-arrow flag), or suppressed when the label is
+    # glued to the box (a pointer would be redundant).
+    if not draw_arrows:
         return False
     return not _label_touches_bbox(label_rect, bbox, stroke)
 
@@ -835,6 +836,7 @@ def render(
     default_color: str,
     stroke_width: int,
     font_path: Optional[str],
+    draw_arrows: bool = True,
 ) -> Image.Image:
     canvas = image.convert("RGBA").copy()
     img_w, img_h = canvas.size
@@ -932,7 +934,7 @@ def render(
         label_rect = (
             *layout["bg_rect"],
         )
-        if _should_draw_arrow(label_rect, render_bbox, ann.show_arrow, stroke_width):
+        if _should_draw_arrow(label_rect, render_bbox, draw_arrows, stroke_width):
             arrow_start, arrow_end, arrow_style = _arrow_endpoints(label_rect, render_bbox)
             _draw_arrow(overlay, arrow_start, arrow_end, color_rgb, stroke_width, arrow_style)
 
