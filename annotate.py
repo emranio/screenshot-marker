@@ -112,10 +112,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--steps",
-        action="store_true",
-        help="Run the validator/correction step after the first render and redraw if needed.",
+        nargs="?",
+        const=1,
+        default=0,
+        type=int,
+        metavar="N",
+        help=(
+            "Run up to N review/correction passes after the first render "
+            "(bare --steps = 1; omitted = 0; max 4). The loop stops early as soon "
+            "as a pass accepts the result."
+        ),
     )
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if not 0 <= args.steps <= 4:
+        p.error("--steps must be between 0 and 4")
+    return args
 
 
 def _collect_queries(args: argparse.Namespace) -> list[str]:

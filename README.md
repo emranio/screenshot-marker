@@ -202,7 +202,7 @@ $ jq '.annotations[0].bbox' result.json
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
 | `--font PATH` | system default | Path to a TrueType font file. |
 | `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
-| `--steps` | off | After the first render, ask a validator/corrector step to inspect the drawn image plus full JSON. If needed, it returns corrected pixel bboxes and the renderer redraws once. Slower. |
+| `--steps[=N]` | off (`N=1` when bare, max 4) | Run up to `N` review/correction passes after the first render. Each pass inspects the drawn image plus full JSON and, if needed, returns corrected pixel bboxes that the renderer redraws before the next pass. The loop stops early as soon as a pass accepts the result. `--steps`/`--steps=1` matches the old single-pass behavior; `--steps=4` allows up to four (the max). Slower. |
 | `--crop` | off | After annotating, ask the model for a focus region around the drawn annotations **plus the related, important surrounding visuals** (the card/panel/section/headers they belong to) and crop the output PNG to it. The crop is unioned with every drawn box/label and padded generously, so it never clips an annotation and never looks tight. One extra LLM call. |
 | `--no-arrow` | off | Never draw arrows. Arrows are on by default for any labeled annotation that sits apart from its target; this flag suppresses them all. The model does not decide arrows. |
 | `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
@@ -225,7 +225,7 @@ result = annotate(
     provider="codex",          # or "gemini" / "claude"
     model=None,                 # defaults to the provider's model
     auth="auth",                # "auth" (native creds) or "api" (API key)
-    reasoning_effort="medium",  # Codex/OpenAI only; ignored by Gemini
+    reasoning_effort="medium",  # all providers (Codex/Claude effort, Gemini thinking budget)
     color="#DC2626",
     stroke_width=None,
     font_path=None,
@@ -234,7 +234,7 @@ result = annotate(
     crop=False,
     crop_padding=0.12,
     draw_arrows=True,
-    steps=False,
+    steps=0,                    # review/correction passes; >0 enables, stops early on accept
 )
 
 # AnnotationResult is a Pydantic model — JSON-shaped:

@@ -66,7 +66,7 @@ def annotate(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
-    steps: bool = False,
+    steps: int = 0,
 ) -> AnnotationResult:
     """Annotate ``image_path`` with one or more natural-language ``queries``.
 
@@ -94,6 +94,10 @@ def annotate(
     drawn annotations and the rendered PNG is cropped down to it (with
     ``crop_padding`` margin so the result is never tight). Annotation coordinates
     in the returned result stay in the original image's coordinate space.
+
+    ``steps`` is the number of review/correction passes (0 disables review).
+    Each pass re-renders the corrected annotations and the next pass validates
+    that render; the loop stops early as soon as a pass accepts the result.
     """
     if not queries:
         raise ValueError("queries must contain at least one annotation request.")
@@ -121,6 +125,7 @@ def annotate(
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
+            steps=steps,
         )
     else:
         result = _annotate_once(
@@ -237,6 +242,7 @@ def _annotate_with_steps(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
+    steps: int,
 ) -> AnnotationResult:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     width, height = image_size(image_path)
@@ -263,32 +269,39 @@ def _annotate_with_steps(
             api_key=api_key,
             reasoning_effort=reasoning_effort,
         )
-        step = run_annotation_step(
-            rendered_image_path=candidate_path,
-            queries=queries,
-            annotations_json=_annotations_json(candidate),
-            width=width,
-            height=height,
-            model=model,
-            provider=provider,
-            auth=auth,
-            api_key=api_key,
-            reasoning_effort=reasoning_effort,
-        )
-        if step.get("decision") == "accept":
-            return _promote_candidate(candidate, candidate_path, output_path)
 
-        corrected = _apply_step_annotations(candidate, step, width, height)
-        _render_result(
-            image_path=image_path,
-            output_path=output_path,
-            annotations=corrected.annotations,
-            color=color,
-            stroke_width=stroke_width,
-            font_path=font_path,
-            draw_arrows=draw_arrows,
-        )
-        return corrected.model_copy(update={"output_path": output_path})
+        # Up to ``steps`` review passes. Each pass validates the current render;
+        # on "accept" we stop early, otherwise we apply its corrections, re-render
+        # the candidate, and the next pass reviews that corrected image.
+        for _ in range(max(1, steps)):
+            step = run_annotation_step(
+                rendered_image_path=candidate_path,
+                queries=queries,
+                annotations_json=_annotations_json(candidate),
+                width=width,
+                height=height,
+                model=model,
+                provider=provider,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
+            )
+            if step.get("decision") == "accept":
+                break
+
+            candidate = _apply_step_annotations(candidate, step, width, height)
+            _render_result(
+                image_path=image_path,
+                output_path=candidate_path,
+                annotations=candidate.annotations,
+                color=color,
+                stroke_width=stroke_width,
+                font_path=font_path,
+                draw_arrows=draw_arrows,
+            )
+            candidate = candidate.model_copy(update={"output_path": candidate_path})
+
+        return _promote_candidate(candidate, candidate_path, output_path)
 
 
 def _annotations_json(result: AnnotationResult) -> str:

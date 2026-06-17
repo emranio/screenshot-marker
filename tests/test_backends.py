@@ -94,7 +94,18 @@ class AuthConfigTests(unittest.TestCase):
         )
         self.assertEqual(args.auth, "api")
         self.assertEqual(args.reasoning_effort, "medium")
-        self.assertTrue(args.steps)
+        self.assertEqual(args.steps, 1)
+
+    def test_cli_steps_count_parsing(self) -> None:
+        base = ["--image", "tests/screens/test_1.jpeg", "--query", "q"]
+        self.assertEqual(cli._parse_args(base).steps, 0)
+        self.assertEqual(cli._parse_args(base + ["--steps"]).steps, 1)
+        self.assertEqual(cli._parse_args(base + ["--steps", "3"]).steps, 3)
+        self.assertEqual(cli._parse_args(base + ["--steps=4"]).steps, 4)
+        with self.assertRaises(SystemExit):
+            cli._parse_args(base + ["--steps", "-1"])
+        with self.assertRaises(SystemExit):
+            cli._parse_args(base + ["--steps", "5"])
 
 
 class AnnotationContractTests(unittest.TestCase):
@@ -356,7 +367,7 @@ class AnnotateAuthTests(unittest.TestCase):
                     queries=["box around main"],
                     refine=False,
                     auth="auth",
-                    steps=True,
+                    steps=1,
                 )
 
             self.assertEqual(result.output_path, output_path)
@@ -394,7 +405,7 @@ class AnnotateAuthTests(unittest.TestCase):
                     queries=["box around main"],
                     refine=False,
                     auth="auth",
-                    steps=True,
+                    steps=1,
                 )
 
             self.assertEqual(result.output_path, output_path)
@@ -403,6 +414,77 @@ class AnnotateAuthTests(unittest.TestCase):
             self.assertEqual(step.call_count, 1)
             self.assertEqual(result.annotations[0].bbox.x, 2)
             self.assertEqual(result.annotations[0].bbox.y, 3)
+
+    @staticmethod
+    def _redraw_step(x: int, y: int) -> dict[str, object]:
+        return {
+            "decision": "redraw",
+            "notes": "fix",
+            "annotations": [
+                {
+                    "request_index": 0,
+                    "request_text": "box around main",
+                    "target_description": "main panel",
+                    "label_text": None,
+                    "bbox": {"x": x, "y": y, "width": 4, "height": 5},
+                    "color": None,
+                    "not_found": False,
+                    "notes": "corrected",
+                }
+            ],
+        }
+
+    def test_steps_loops_until_accept_and_breaks_early(self) -> None:
+        accept = {"decision": "accept", "notes": "", "annotations": RAW_RESPONSE["annotations"]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "screen.png"
+            output_path = Path(tmpdir) / "annotated.png"
+            Image.new("RGB", (40, 40), "white").save(image_path)
+
+            with patch("marker.call_vision", return_value=RAW_RESPONSE), patch(
+                "marker.run_annotation_step",
+                side_effect=[self._redraw_step(2, 3), accept, accept],
+            ) as step:
+                result = marker.annotate(
+                    image_path=image_path,
+                    output_path=output_path,
+                    queries=["box around main"],
+                    refine=False,
+                    auth="auth",
+                    steps=3,
+                )
+
+            # redraw (pass 1) then accept (pass 2) → break before the 3rd pass.
+            self.assertEqual(step.call_count, 2)
+            self.assertTrue(output_path.is_file())
+            # The accepted render keeps the pass-1 correction.
+            self.assertEqual(result.annotations[0].bbox.x, 2)
+            self.assertEqual(result.annotations[0].bbox.y, 3)
+
+    def test_steps_exhausts_count_without_accept(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "screen.png"
+            output_path = Path(tmpdir) / "annotated.png"
+            Image.new("RGB", (40, 40), "white").save(image_path)
+
+            with patch("marker.call_vision", return_value=RAW_RESPONSE), patch(
+                "marker.run_annotation_step",
+                side_effect=[self._redraw_step(2, 3), self._redraw_step(6, 7)],
+            ) as step:
+                result = marker.annotate(
+                    image_path=image_path,
+                    output_path=output_path,
+                    queries=["box around main"],
+                    refine=False,
+                    auth="auth",
+                    steps=2,
+                )
+
+            # No accept → both passes run, last correction wins.
+            self.assertEqual(step.call_count, 2)
+            self.assertTrue(output_path.is_file())
+            self.assertEqual(result.annotations[0].bbox.x, 6)
+            self.assertEqual(result.annotations[0].bbox.y, 7)
 
 
 class ProviderConfigTests(unittest.TestCase):
