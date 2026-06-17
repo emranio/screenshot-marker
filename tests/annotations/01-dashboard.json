@@ -3,9 +3,9 @@
   "annotations": [
     {
       "request_index": 0,
-      "request_text": "rectangle with an arrow pointing to the underlined link 'Learn more about the 7.0 version' under the big 'Welcome to WordPress!' heading, label 'Step 1: Confirm WordPress 7.0'",
+      "request_text": "rectangle with an arrow pointing to the underlined link 'Learn more about the 7.0 version' under the big 'Welcome to WordPress!' heading, label 'Step 1: Confirm your site is running WordPress 7.0 before enabling AI features'",
       "target_description": "Underlined “Learn more about the 7.0 version.” link in the Welcome to WordPress banner",
-      "label_text": "Step 1: Confirm WordPress 7.0",
+      "label_text": "Step 1: Confirm your site is running WordPress 7.0 before enabling AI features",
       "bbox": {
         "x": 229,
         "y": 224,

@@ -3,9 +3,9 @@
   "annotations": [
     {
       "request_index": 0,
-      "request_text": "rectangle around the bold text 'Current version: 7.0' and the 'Last checked' line just below it, label 'AI needs WordPress 7.0+'",
+      "request_text": "rectangle around the bold text 'Current version: 7.0' and the 'Last checked' line just below it, label 'AI features require WordPress version 7.0 or newer to be installed'",
       "target_description": "The current WordPress version text block, including the bold 'Current version: 7.0' line and the 'Last checked' line beneath it",
-      "label_text": "AI needs WordPress 7.0+",
+      "label_text": "AI features require WordPress version 7.0 or newer to be installed",
       "bbox": {
         "x": 217,
         "y": 187,
