@@ -601,23 +601,9 @@ def _curved_arrow_points(
 
 
 def _arrow_bend(start: tuple[float, float], end: tuple[float, float], style: str) -> float:
-    if style == "straight":
-        return 0.0
-
-    sx, sy = start
-    ex, ey = end
-    dx = ex - sx
-    dy = ey - sy
-    length = math.hypot(dx, dy)
-    if length < 1:
-        return 0.0
-
-    amount = min(max(length * 0.28, 12), 70)
-    if abs(dx) < abs(dy) * 0.45:
-        return amount if dy < 0 else -amount
-    if abs(dy) < abs(dx) * 0.45:
-        return -amount if dx > 0 else amount
-    return amount if dx * dy < 0 else -amount
+    # Arrows are always straight; curved arrows were removed. Kept as a hook so
+    # the call site (and the style argument) stay intact.
+    return 0.0
 
 
 def _draw_arrow(
@@ -648,7 +634,7 @@ def _draw_arrow(
         tangent_len = desired_len
     ux, uy = tx / tangent_len, ty / tangent_len
 
-    head_len = max(arrow_stroke * 3.5, 17)
+    head_len = max(arrow_stroke * 1.75, 8.5)
     head_angle = math.radians(42)
     tangent_angle = math.atan2(uy, ux)
     wing_left = (
