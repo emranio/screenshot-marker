@@ -49,6 +49,11 @@ def _line_height(font: ImageFont.ImageFont) -> int:
     return ascent + descent
 
 
+def _line_spacing(line_h: int) -> int:
+    """Vertical gap between wrapped label lines (kept tight)."""
+    return max(2, line_h // 8)
+
+
 def _measure_line(
     draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont
 ) -> int:
@@ -89,7 +94,7 @@ def _wrap_text(
         return None
 
     line_h = _line_height(font)
-    spacing = max(2, line_h // 5)
+    spacing = _line_spacing(line_h)
     total_h = line_h * len(lines) + spacing * (len(lines) - 1)
     total_w = max(_measure_line(draw, ln, font) for ln in lines)
     return lines, total_w, total_h
@@ -795,7 +800,12 @@ def _render_label(
 
     bg_w = bg_x1 - bg_x0
     bg_h = bg_y1 - bg_y0
-    radius = max(8, min(bg_w, bg_h) // 2)
+    if len(lines) > 1:
+        # Multi-line: a rounded rectangle (not a pill) — modest, bounded corners.
+        radius = min(max(12, min(bg_w, bg_h) // 5), 34)
+    else:
+        # Single line: fully rounded pill ends.
+        radius = max(8, min(bg_w, bg_h) // 2)
 
     mask = _rounded_mask((bg_w, bg_h), radius)
     tint = Image.new("RGBA", (bg_w, bg_h), color_rgb + (LABEL_BG_ALPHA,))
@@ -803,7 +813,7 @@ def _render_label(
 
     draw = ImageDraw.Draw(canvas)
     line_h = _line_height(font)
-    spacing = max(2, line_h // 5)
+    spacing = _line_spacing(line_h)
     cy = ly
     for line in lines:
         draw.text(
@@ -830,7 +840,7 @@ def render(
     base_font_size = max(20, stroke_width * 4)
     gap = max(stroke_width * 6, 48)
     margin = max(stroke_width, 8)
-    label_pad_x = max(stroke_width * 2, 18)
+    label_pad_x = max(stroke_width * 2 + 8, 24)
     label_pad_y = max(stroke_width, 10)
     rectangle_stroke = max(2.5, round(stroke_width * 0.45))
 
