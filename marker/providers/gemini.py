@@ -14,6 +14,10 @@ Auth maps onto the two shared modes:
 This is the same SDK the Google Agent Development Kit (ADK) uses under the hood
 for every Gemini turn; here we call it directly because the marker flow is a
 single structured vision request, not a multi-turn agent loop.
+
+``reasoning_effort`` maps onto a Gemini thinking-token budget (``ThinkingConfig``)
+so the shared effort setting applies here too, the same way it drives Codex's
+``model_reasoning_effort`` and Claude's ``effort``.
 """
 from __future__ import annotations
 
@@ -44,6 +48,18 @@ _JSON_TYPE_TO_GENAI = {
     "integer": "INTEGER",
     "number": "NUMBER",
     "boolean": "BOOLEAN",
+}
+
+# Gemini has no "effort" enum; it sizes reasoning with a thinking-token budget.
+# Map the package's shared effort levels onto budgets that stay inside the range
+# accepted by every Gemini 2.5 model (Pro 128-32768, Flash/Lite up to 24576), so
+# the same value is valid whatever MODEL is set to.
+_EFFORT_TO_THINKING_BUDGET = {
+    "minimal": 512,
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+    "xhigh": 24576,
 }
 
 
@@ -113,7 +129,7 @@ def call_json(
     output_schema: dict[str, Any],
     auth: str,
     api_key: str | None = None,
-    reasoning_effort: str | None = None,  # noqa: ARG001 - Codex-only; accepted for parity
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     genai, types = _load_genai()
     client = _build_client(genai, auth, api_key)
@@ -121,12 +137,16 @@ def call_json(
     parts: list[Any] = [types.Part.from_text(text=f"{user_text}\n\nReturn JSON only.")]
     parts.extend(_image_part(path, types) for path in image_paths)
 
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        response_mime_type="application/json",
-        response_schema=_to_genai_schema(output_schema, types) if output_schema else None,
-        temperature=0,
-    )
+    config_kwargs: dict[str, Any] = {
+        "system_instruction": system_prompt,
+        "response_mime_type": "application/json",
+        "response_schema": _to_genai_schema(output_schema, types) if output_schema else None,
+        "temperature": 0,
+    }
+    budget = _EFFORT_TO_THINKING_BUDGET.get((reasoning_effort or "").strip().lower())
+    if budget is not None:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget)
+    config = types.GenerateContentConfig(**config_kwargs)
     response = client.models.generate_content(
         model=model,
         contents=[types.Content(role="user", parts=parts)],

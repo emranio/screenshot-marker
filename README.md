@@ -69,9 +69,10 @@ export MARKER_AUTH=api
 export CODEX_API_KEY=sk-...   # OPENAI_API_KEY also works
 ```
 
-`OPENAI_MODEL` (default `gpt-5.5`) and `OPENAI_REASONING_EFFORT` (default
-`medium`) tune the Codex path. Higher effort can improve difficult spatial
-reasoning, but it will be slower.
+`MODEL` (default `gpt-5.5`) and `REASONING_EFFORT` (default `medium`) tune the
+Codex path. `MODEL` and `REASONING_EFFORT` are shared across every provider —
+see [Model and reasoning effort](#model-and-reasoning-effort). Higher effort can
+improve difficult spatial reasoning, but it will be slower.
 
 ### Gemini (Google)
 
@@ -95,11 +96,12 @@ export GOOGLE_CLOUD_PROJECT=your-gcp-project
 export GOOGLE_CLOUD_LOCATION=us-central1   # optional, defaults to us-central1
 ```
 
-`GEMINI_MODEL` (default `gemini-2.5-pro`) selects the model. Newer models such
-as `gemini-3-pro-preview` also work — set `GEMINI_MODEL` or pass `--model`.
-`OPENAI_REASONING_EFFORT` is ignored by Gemini. Lite models
-(e.g. `gemini-3.1-flash-lite`) are **not** recommended: they tend to ignore the
-normalized-coordinate contract and return pixel values, which fail validation.
+`MODEL` (default `gemini-2.5-pro`) selects the model. Newer models such as
+`gemini-3-pro-preview` also work — set `MODEL` or pass `--model`.
+`REASONING_EFFORT` is honored here too: it maps to Gemini's thinking-token
+budget. Lite models (e.g. `gemini-3.1-flash-lite`) are **not** recommended: they
+tend to ignore the normalized-coordinate contract and return pixel values, which
+fail validation.
 
 ### Claude (Anthropic)
 
@@ -122,8 +124,21 @@ export ANTHROPIC_AUTH_TOKEN=...        # CLAUDE_CODE_OAUTH_TOKEN also works
 ```
 
 When `MARKER_AUTH=auth` and no token is set, the SDK falls back to a local
-`claude` / `ant` login profile. `CLAUDE_MODEL` (default `claude-opus-4-8`)
-selects the model, and `--reasoning-effort` maps to Claude's `effort`.
+`claude` / `ant` login profile. `MODEL` (default `claude-opus-4-8`) selects the
+model, and `REASONING_EFFORT` / `--reasoning-effort` maps to Claude's `effort`.
+
+### Model and reasoning effort
+
+`MODEL` and `REASONING_EFFORT` are shared across every provider, so you set them
+once regardless of which backend `MARKER_PROVIDER` selects:
+
+- **`MODEL`** overrides the active provider's default model (codex →
+  `gpt-5.5`, gemini → `gemini-2.5-pro`, claude → `claude-opus-4-8`). Leave it
+  unset to use that default; `--model` overrides per run.
+- **`REASONING_EFFORT`** is one of `minimal`, `low`, `medium`, `high`, `xhigh`
+  (default `medium`) and applies to all three backends: Codex's
+  `model_reasoning_effort`, Claude's `effort`, and Gemini's thinking-token
+  budget. `--reasoning-effort` overrides per run.
 
 ### Optional `.env`
 
@@ -133,11 +148,10 @@ See [`.env.example`](.env.example) for the full set. A minimal Gemini setup:
 MARKER_PROVIDER=gemini
 MARKER_AUTH=api
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-pro
+MODEL=gemini-2.5-pro
 ```
 
-Both the CLI and the Python API pick these up automatically. The legacy value
-`MARKER_AUTH=codex` still works and is treated as `auth`.
+Both the CLI and the Python API pick these up automatically.
 
 ---
 
@@ -179,9 +193,9 @@ $ jq '.annotations[0].bbox' result.json
 | `--query "..."` | — | A natural‑language annotation request. Repeatable. |
 | `--queries-file PATH` | — | A JSON array of query strings, or a saved annotation result JSON from `tests/annotations`. Combine with `--query` if you want. |
 | `--provider codex\|gemini\|claude` | `$MARKER_PROVIDER` or `codex` | Vision backend. `codex` = OpenAI Agents SDK; `gemini` = Google Gen AI SDK; `claude` = Anthropic SDK. |
-| `--model NAME` | provider default (`gpt-5.5` / `gemini-2.5-pro` / `claude-opus-4-8`) | Override the vision model for this run. Reads `$OPENAI_MODEL` / `$GEMINI_MODEL` / `$CLAUDE_MODEL`. |
-| `--reasoning-effort minimal\|low\|medium\|high\|xhigh` | `$OPENAI_REASONING_EFFORT` or `medium` | Reasoning effort for Codex/OpenAI and Claude (maps to Claude's `effort`). Ignored by Gemini. |
-| `--auth auth\|api` | `$MARKER_AUTH` or provider default | `auth` uses native credentials (`codex login` / Vertex AI); `api` uses an API key. `codex` is accepted as a legacy alias for `auth`. |
+| `--model NAME` | `$MODEL` or provider default (`gpt-5.5` / `gemini-2.5-pro` / `claude-opus-4-8`) | Override the vision model for this run. |
+| `--reasoning-effort minimal\|low\|medium\|high\|xhigh` | `$REASONING_EFFORT` or `medium` | Reasoning effort for every provider: Codex's `model_reasoning_effort`, Claude's `effort`, Gemini's thinking budget. |
+| `--auth auth\|api` | `$MARKER_AUTH` or provider default | `auth` uses native credentials (`codex login` / Vertex AI); `api` uses an API key. |
 | `--color HEX` | `#DC2626` | Default annotation color. |
 | `--stroke INT` | auto‑scaled | Stroke width in pixels. Scales with `sqrt(min(w,h)) × 0.27` if omitted. |
 | `--font PATH` | system default | Path to a TrueType font file. |

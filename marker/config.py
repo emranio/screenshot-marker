@@ -31,10 +31,6 @@ _FALLBACK_PROVIDER: Provider = "codex"
 AuthMode = Literal["auth", "api"]
 AUTH_MODES: tuple[AuthMode, ...] = ("auth", "api")
 
-# Backwards compatibility: MARKER_AUTH=codex used to mean "Codex subscription
-# auth". It now maps onto the generic native "auth" mode.
-_AUTH_ALIASES: dict[str, AuthMode] = {"codex": "auth"}
-
 # A provider's native (non-API-key) auth is selected by any of these values.
 NATIVE_AUTH_MODES: tuple[str, ...] = ("auth",)
 
@@ -49,12 +45,11 @@ REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
 
 _FALLBACK_REASONING_EFFORT: ReasoningEffort = "medium"
 
-# Per-provider model selection: env var to read and the fallback default.
-_MODEL_ENV: dict[Provider, str] = {
-    "codex": "OPENAI_MODEL",
-    "gemini": "GEMINI_MODEL",
-    "claude": "CLAUDE_MODEL",
-}
+# Model selection. A single shared MODEL env var overrides the active provider's
+# built-in default below. (Each provider previously had its own var — OPENAI_MODEL
+# / GEMINI_MODEL / CLAUDE_MODEL — but one MODEL is simpler and avoids the trap of
+# setting the wrong provider's var; pass --model to override per run.)
+_MODEL_ENV = "MODEL"
 _FALLBACK_MODEL: dict[Provider, str] = {
     "codex": "gpt-5.5",
     "gemini": "gemini-2.5-pro",
@@ -85,7 +80,7 @@ load_env()
 DEFAULT_PROVIDER: Provider = _FALLBACK_PROVIDER
 # Default model for the default provider. Provider-specific resolution lives in
 # resolve_model(); this is kept for callers/tests that want a plain default.
-DEFAULT_MODEL = os.environ.get(_MODEL_ENV[DEFAULT_PROVIDER], _FALLBACK_MODEL[DEFAULT_PROVIDER])
+DEFAULT_MODEL = os.environ.get(_MODEL_ENV, _FALLBACK_MODEL[DEFAULT_PROVIDER])
 DEFAULT_AUTH_MODE: AuthMode = _DEFAULT_AUTH[DEFAULT_PROVIDER]
 DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium"
 DEFAULT_COLOR = "#DC2626"
@@ -127,7 +122,6 @@ def resolve_auth_mode(auth: str | None = None, provider: str | None = None) -> A
         # No explicit choice: fall back to the selected provider's default.
         return _DEFAULT_AUTH[resolve_provider(provider)]
     normalized = raw.strip().lower()
-    normalized = _AUTH_ALIASES.get(normalized, normalized)
     if normalized not in AUTH_MODES:
         choices = ", ".join(AUTH_MODES)
         raise ValueError(f"Unsupported auth mode {raw!r}. Expected one of: {choices}.")
@@ -136,7 +130,7 @@ def resolve_auth_mode(auth: str | None = None, provider: str | None = None) -> A
 
 def is_native_auth(auth: str) -> bool:
     """True when ``auth`` selects a provider's native (non-API-key) credentials."""
-    return _AUTH_ALIASES.get(auth, auth) in NATIVE_AUTH_MODES
+    return auth in NATIVE_AUTH_MODES
 
 
 def resolve_model(model: str | None = None, provider: str | None = None) -> str:
@@ -144,7 +138,7 @@ def resolve_model(model: str | None = None, provider: str | None = None) -> str:
     if model:
         return model
     prov = resolve_provider(provider)
-    return os.environ.get(_MODEL_ENV[prov], _FALLBACK_MODEL[prov])
+    return os.environ.get(_MODEL_ENV, _FALLBACK_MODEL[prov])
 
 
 def default_model_for(provider: str | None = None) -> str:
@@ -157,7 +151,7 @@ def resolve_reasoning_effort(effort: str | None = None) -> ReasoningEffort:
     value = (
         effort
         if effort is not None
-        else os.environ.get("OPENAI_REASONING_EFFORT", _FALLBACK_REASONING_EFFORT)
+        else os.environ.get("REASONING_EFFORT", _FALLBACK_REASONING_EFFORT)
     )
     normalized = value.strip().lower()
     if normalized not in REASONING_EFFORTS:

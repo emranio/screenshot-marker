@@ -48,16 +48,13 @@ class AuthConfigTests(unittest.TestCase):
             self.assertEqual(config.resolve_auth_mode(), "api")
             self.assertEqual(config.resolve_auth_mode("auth"), "auth")
 
-    def test_resolve_auth_codex_alias_maps_to_native_auth(self) -> None:
-        # Legacy MARKER_AUTH=codex keeps working and means native "auth".
+    def test_resolve_auth_rejects_codex_value(self) -> None:
+        # The removed legacy alias is no longer accepted.
         with patch("marker.config.load_env", lambda: None), patch.dict(
             os.environ, {}, clear=True
         ):
-            self.assertEqual(config.resolve_auth_mode("codex"), "auth")
-        with patch("marker.config.load_env", lambda: None), patch.dict(
-            os.environ, {"MARKER_AUTH": "codex"}, clear=True
-        ):
-            self.assertEqual(config.resolve_auth_mode(), "auth")
+            with self.assertRaisesRegex(ValueError, "Unsupported auth mode"):
+                config.resolve_auth_mode("codex")
 
     def test_resolve_auth_rejects_unknown_values(self) -> None:
         with patch("marker.config.load_env", lambda: None):
@@ -101,7 +98,7 @@ class AuthConfigTests(unittest.TestCase):
 
 
 class AnnotationContractTests(unittest.TestCase):
-    def test_parse_response_converts_label_position_and_arrow_flag(self) -> None:
+    def test_parse_response_converts_label_position(self) -> None:
         raw = {
             "annotations": [
                 {
@@ -116,7 +113,6 @@ class AnnotationContractTests(unittest.TestCase):
                         "width": 0.2,
                         "height": 0.1,
                     },
-                    "show_arrow": False,
                     "color": None,
                     "not_found": False,
                     "notes": "",
@@ -137,7 +133,6 @@ class AnnotationContractTests(unittest.TestCase):
             annotations[0].label_position,
             Bbox(x=100, y=70, width=40, height=10),
         )
-        self.assertIs(annotations[0].show_arrow, False)
 
     def test_touching_labels_suppress_arrows(self) -> None:
         # A label flush against the box (no visible gap) needs no arrow, even
@@ -148,15 +143,16 @@ class AnnotationContractTests(unittest.TestCase):
         self.assertFalse(drawing._should_draw_arrow(touching_label, bbox, None, 4))
         self.assertFalse(drawing._should_draw_arrow(touching_label, bbox, True, 4))
 
-    def test_offset_labels_draw_arrows_by_default(self) -> None:
-        # A label sitting apart from the box gets an arrow by default; only an
-        # explicit show_arrow=False suppresses it.
+    def test_offset_labels_draw_arrows_when_enabled(self) -> None:
+        # A label sitting apart from the box gets an arrow when arrows are enabled
+        # (draw_arrows=True). draw_arrows=False suppresses it. The default-on choice
+        # lives in the caller, so a falsy draw_arrows (None) here means "off".
         bbox = Bbox(x=50, y=50, width=80, height=30)
         offset_label = (10.0, 170.0, 108.0, 200.0)  # 90px below, clear gap
 
-        self.assertTrue(drawing._should_draw_arrow(offset_label, bbox, None, 4))
         self.assertTrue(drawing._should_draw_arrow(offset_label, bbox, True, 4))
         self.assertFalse(drawing._should_draw_arrow(offset_label, bbox, False, 4))
+        self.assertFalse(drawing._should_draw_arrow(offset_label, bbox, None, 4))
 
     def test_render_accepts_model_label_position(self) -> None:
         image = Image.new("RGB", (240, 160), "white")
@@ -224,7 +220,7 @@ class CodexSdkPathTests(unittest.TestCase):
                     50,
                     ["box around main"],
                     "gpt-5.5",
-                    auth="codex",
+                    auth="auth",
                     reasoning_effort="medium",
                 )
 
@@ -326,7 +322,7 @@ class AnnotateAuthTests(unittest.TestCase):
 
             with patch("marker.config.load_env", lambda: None), patch.dict(
                 os.environ,
-                {"MARKER_AUTH": "api", "OPENAI_REASONING_EFFORT": "high"},
+                {"MARKER_AUTH": "api", "REASONING_EFFORT": "high"},
                 clear=True,
             ), patch("marker.call_vision", return_value=RAW_RESPONSE) as call:
                 marker.annotate(
@@ -360,7 +356,7 @@ class AnnotateAuthTests(unittest.TestCase):
                     output_path=output_path,
                     queries=["box around main"],
                     refine=False,
-                    auth="codex",
+                    auth="auth",
                     steps=True,
                 )
 
@@ -398,7 +394,7 @@ class AnnotateAuthTests(unittest.TestCase):
                     output_path=output_path,
                     queries=["box around main"],
                     refine=False,
-                    auth="codex",
+                    auth="auth",
                     steps=True,
                 )
 
@@ -439,7 +435,7 @@ class ProviderConfigTests(unittest.TestCase):
             self.assertEqual(config.resolve_auth_mode(provider="gemini"), "api")
             self.assertEqual(config.resolve_auth_mode(provider="claude"), "api")
 
-    def test_resolve_model_per_provider(self) -> None:
+    def test_resolve_model_falls_back_to_provider_default(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
             os.environ, {}, clear=True
         ):
@@ -447,14 +443,16 @@ class ProviderConfigTests(unittest.TestCase):
             self.assertEqual(config.resolve_model(None, "gemini"), "gemini-2.5-pro")
             self.assertEqual(config.resolve_model(None, "claude"), "claude-opus-4-8")
             self.assertEqual(config.resolve_model("custom-model", "gemini"), "custom-model")
+
+    def test_shared_model_env_overrides_every_provider(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
-            os.environ,
-            {"GEMINI_MODEL": "gemini-x", "OPENAI_MODEL": "gpt-x", "CLAUDE_MODEL": "claude-x"},
-            clear=True,
+            os.environ, {"MODEL": "shared-x"}, clear=True
         ):
-            self.assertEqual(config.resolve_model(None, "gemini"), "gemini-x")
-            self.assertEqual(config.resolve_model(None, "codex"), "gpt-x")
-            self.assertEqual(config.resolve_model(None, "claude"), "claude-x")
+            self.assertEqual(config.resolve_model(None, "gemini"), "shared-x")
+            self.assertEqual(config.resolve_model(None, "codex"), "shared-x")
+            self.assertEqual(config.resolve_model(None, "claude"), "shared-x")
+            # An explicit model argument still wins over the env var.
+            self.assertEqual(config.resolve_model("explicit", "claude"), "explicit")
 
     def test_get_claude_api_key_accepts_either_env(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
@@ -576,6 +574,51 @@ class GeminiProviderTests(unittest.TestCase):
                     output_schema=vision.RESPONSE_SCHEMA,
                     auth="auth",
                 )
+
+    def _run_gemini_with_captured_config(self, reasoning_effort: str | None) -> object:
+        """Call gemini.call_json with a stubbed client and return the genai config."""
+        from marker.providers import gemini
+
+        captured: dict[str, object] = {}
+
+        class _FakeModels:
+            def generate_content(self, *, model: object, contents: object, config: object) -> object:
+                captured["config"] = config
+                return type("_Resp", (), {"text": json.dumps(RAW_RESPONSE)})()
+
+        client = type("_FakeClient", (), {"models": _FakeModels()})()
+        with patch.object(gemini, "_build_client", return_value=client):
+            result = gemini.call_json(
+                image_paths=["tests/screens/test_1.jpeg"],
+                system_prompt="sys",
+                user_text="user",
+                model="gemini-2.5-pro",
+                output_schema=vision.RESPONSE_SCHEMA,
+                auth="api",
+                api_key="g-key",
+                reasoning_effort=reasoning_effort,
+            )
+        self.assertEqual(result, RAW_RESPONSE)
+        return captured["config"]
+
+    def test_reasoning_effort_maps_to_thinking_budget(self) -> None:
+        try:
+            import google.genai  # noqa: F401
+        except ImportError:
+            self.skipTest("google-genai not installed")
+
+        config_obj = self._run_gemini_with_captured_config("high")
+        self.assertIsNotNone(config_obj.thinking_config)
+        self.assertEqual(config_obj.thinking_config.thinking_budget, 16384)
+
+    def test_no_reasoning_effort_omits_thinking_config(self) -> None:
+        try:
+            import google.genai  # noqa: F401
+        except ImportError:
+            self.skipTest("google-genai not installed")
+
+        config_obj = self._run_gemini_with_captured_config(None)
+        self.assertIsNone(config_obj.thinking_config)
 
 
 class ClaudeProviderTests(unittest.TestCase):

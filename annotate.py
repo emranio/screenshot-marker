@@ -62,16 +62,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--model",
         default=None,
-        help="Vision model. Defaults to the selected provider's default model.",
+        help="Vision model. Defaults to $MODEL or the selected provider's default model.",
     )
     p.add_argument(
         "--reasoning-effort",
         choices=REASONING_EFFORTS,
         default=None,
         help=(
-            "Reasoning effort for the Codex/OpenAI and Claude backends "
-            "(ignored by Gemini). Defaults to "
-            f"$OPENAI_REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
+            "Reasoning effort, applied to every provider (Codex's "
+            "model_reasoning_effort, Claude's effort, Gemini's thinking budget). "
+            f"Defaults to $REASONING_EFFORT or {DEFAULT_REASONING_EFFORT}."
         ),
     )
     p.add_argument(
