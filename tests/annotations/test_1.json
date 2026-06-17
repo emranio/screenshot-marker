@@ -4,21 +4,20 @@
     {
       "request_index": 0,
       "request_text": "red box on the customer info section, label 'Customer Details'",
-      "target_description": "Customer Information card in the right column",
+      "target_description": "Customer Information section on the right side",
       "label_text": "Customer Details",
       "bbox": {
-        "x": 2640,
-        "y": 1866,
-        "width": 1953,
-        "height": 930
+        "x": 2639,
+        "y": 1864,
+        "width": 1951,
+        "height": 937
       },
       "label_position": {
         "x": 2644,
-        "y": 1564,
-        "width": 691,
-        "height": 205
+        "y": 1540,
+        "width": 715,
+        "height": 237
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -26,21 +25,20 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the payment timeline labeled 'Activity Log'",
-      "target_description": "Payment Timeline card in the lower left column",
+      "target_description": "Payment Timeline section on the bottom left",
       "label_text": "Activity Log",
       "bbox": {
-        "x": 632,
-        "y": 5567,
-        "width": 1947,
-        "height": 2114
+        "x": 631,
+        "y": 5556,
+        "width": 1951,
+        "height": 2043
       },
       "label_position": {
         "x": 629,
-        "y": 5330,
-        "width": 548,
-        "height": 205
+        "y": 5228,
+        "width": 572,
+        "height": 237
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

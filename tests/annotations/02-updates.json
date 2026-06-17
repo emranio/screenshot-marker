@@ -4,21 +4,20 @@
     {
       "request_index": 0,
       "request_text": "rectangle around the bold text 'Current version: 7.0' and the 'Last checked' line just below it, label 'AI features require WordPress version 7.0 or newer to be installed'",
-      "target_description": "The current WordPress version text block, including the bold 'Current version: 7.0' line and the 'Last checked' line beneath it",
+      "target_description": "The 'Current version: 7.0' heading and the 'Last checked' status line directly underneath it",
       "label_text": "AI features require WordPress version 7.0 or newer to be installed",
       "bbox": {
-        "x": 217,
-        "y": 187,
-        "width": 420,
-        "height": 34
+        "x": 182,
+        "y": 184,
+        "width": 412,
+        "height": 41
       },
       "label_position": {
-        "x": 181,
-        "y": 241,
-        "width": 245,
-        "height": 36
+        "x": 619,
+        "y": 180,
+        "width": 504,
+        "height": 54
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -26,21 +25,20 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the bold heading 'You have the latest version of WordPress.', label 'Fully updated'",
-      "target_description": "Bold heading text stating 'You have the latest version of WordPress.'",
+      "target_description": "The bold heading 'You have the latest version of WordPress.'",
       "label_text": "Fully updated",
       "bbox": {
         "x": 182,
-        "y": 368,
-        "width": 367,
-        "height": 19
+        "y": 369,
+        "width": 326,
+        "height": 15
       },
       "label_position": {
-        "x": 181,
-        "y": 407,
-        "width": 153,
+        "x": 533,
+        "y": 360,
+        "width": 173,
         "height": 36
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

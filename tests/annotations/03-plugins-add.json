@@ -4,21 +4,20 @@
     {
       "request_index": 0,
       "request_text": "rectangle with an arrow on the 'Upload Plugin' button next to the 'Add Plugins' page title, label 'Upload an AI plugin zip'",
-      "target_description": "Upload Plugin button next to the Add Plugins page title",
+      "target_description": "'Upload Plugin' button next to the 'Add Plugins' title",
       "label_text": "Upload an AI plugin zip",
       "bbox": {
-        "x": 310,
-        "y": 51,
-        "width": 128,
-        "height": 34
+        "x": 309,
+        "y": 50,
+        "width": 112,
+        "height": 32
       },
       "label_position": {
-        "x": 434,
-        "y": 50,
-        "width": 223,
+        "x": 310,
+        "y": 99,
+        "width": 259,
         "height": 36
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -26,21 +25,20 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the 'Search plugins' input box in the top right, label 'Or search: AI'",
-      "target_description": "Search Plugins text input box in the top-right plugin search area",
+      "target_description": "'Search plugins' text input field",
       "label_text": "Or search: AI",
       "bbox": {
-        "x": 1028,
+        "x": 1030,
         "y": 140,
-        "width": 293,
-        "height": 34
+        "width": 279,
+        "height": 35
       },
       "label_position": {
         "x": 1030,
-        "y": 176,
-        "width": 166,
-        "height": 25
+        "y": 99,
+        "width": 173,
+        "height": 36
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -48,21 +46,20 @@
     {
       "request_index": 2,
       "request_text": "draw a rectangle around the whole plugin card in the right column of the second row, titled 'Vereal AI Gateway Provider' with 'By Vereal' beneath it and an 'Install Now' button, label 'Example: AI provider'",
-      "target_description": "Right-column second-row plugin card for Vercel AI Gateway Provider with Install Now button",
+      "target_description": "Vercel AI Gateway Provider plugin card",
       "label_text": "Example: AI provider",
       "bbox": {
-        "x": 812,
-        "y": 500,
-        "width": 627,
-        "height": 255
+        "x": 810,
+        "y": 498,
+        "width": 609,
+        "height": 254
       },
       "label_position": {
         "x": 809,
-        "y": 470,
-        "width": 216,
-        "height": 25
+        "y": 760,
+        "width": 230,
+        "height": 36
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""

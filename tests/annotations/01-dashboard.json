@@ -4,21 +4,20 @@
     {
       "request_index": 0,
       "request_text": "rectangle with an arrow pointing to the underlined link 'Learn more about the 7.0 version' under the big 'Welcome to WordPress!' heading, label 'Step 1: Confirm your site is running WordPress 7.0 before enabling AI features'",
-      "target_description": "Underlined “Learn more about the 7.0 version.” link in the Welcome to WordPress banner",
+      "target_description": "Underlined link 'Learn more about the 7.0 version.' inside the welcome banner",
       "label_text": "Step 1: Confirm your site is running WordPress 7.0 before enabling AI features",
       "bbox": {
-        "x": 229,
-        "y": 224,
-        "width": 293,
-        "height": 17
+        "x": 227,
+        "y": 240,
+        "width": 165,
+        "height": 2
       },
       "label_position": {
-        "x": 230,
-        "y": 254,
-        "width": 340,
-        "height": 36
+        "x": 160,
+        "y": 288,
+        "width": 576,
+        "height": 45
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
@@ -26,21 +25,20 @@
     {
       "request_index": 1,
       "request_text": "rectangle around the line 'WordPress 7.0 running Twenty Twenty-Five theme' inside the 'At a Glance' box, label 'Version confirmed'",
-      "target_description": "WordPress version/theme line at the bottom of the At a Glance dashboard widget",
+      "target_description": "The text line 'WordPress 7.0 running Twenty Twenty-Five theme.' at the bottom of the At a Glance widget",
       "label_text": "Version confirmed",
       "bbox": {
-        "x": 197,
-        "y": 839,
-        "width": 306,
-        "height": 34
+        "x": 195,
+        "y": 851,
+        "width": 286,
+        "height": 13
       },
       "label_position": {
-        "x": 497,
-        "y": 838,
-        "width": 204,
+        "x": 461,
+        "y": 837,
+        "width": 173,
         "height": 36
       },
-      "show_arrow": true,
       "color": null,
       "not_found": false,
       "notes": ""
