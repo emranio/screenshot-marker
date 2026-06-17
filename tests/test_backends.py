@@ -163,7 +163,6 @@ class AnnotationContractTests(unittest.TestCase):
             label_text="Main",
             bbox=Bbox(x=40, y=40, width=80, height=40),
             label_position=Bbox(x=42, y=92, width=96, height=36),
-            show_arrow=False,
         )
 
         rendered = drawing.render(

@@ -336,7 +336,8 @@ Tips:
    └──────────┬───────────┘
               ▼
    ┌──── call_vision (1 LLM call, all queries) ────┐
-   │  → JSON: bbox, label_position, arrow, color    │
+   │  → JSON: bbox, label_position, label_text,      │
+   │         color, not_found  (no arrow field)      │
    └──────────┬─────────────────────────────────────┘
               ▼
    ┌──── parse_response ────┐
