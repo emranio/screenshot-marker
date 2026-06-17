@@ -9,8 +9,9 @@ Auth maps onto the two shared modes:
 * ``api``  -> an Anthropic API key (``ANTHROPIC_API_KEY`` / ``CLAUDE_API_KEY``).
 * ``auth`` -> a Claude subscription bearer token (``ANTHROPIC_AUTH_TOKEN`` /
               ``CLAUDE_CODE_OAUTH_TOKEN``), sent with the ``oauth-2025-04-20``
-              beta header; falls back to the SDK's default credential resolution
-              (e.g. a ``claude`` / ``ant`` login profile) when no token is set.
+              beta header. Generate one with ``claude setup-token``. The SDK does
+              NOT read a local ``claude`` login from disk, so a token must be set;
+              native auth raises a clear error when none is found.
 
 Structured JSON uses the Messages API ``output_config.format`` (json_schema), so
 the package's existing JSON schemas are reused verbatim. Adaptive thinking is on
@@ -29,6 +30,10 @@ from ..config import get_claude_api_key, get_claude_auth_token, is_native_auth
 # Bearer (OAuth/subscription) tokens require this beta header on /v1/messages.
 _OAUTH_BETA = "oauth-2025-04-20"
 _MAX_TOKENS = 8192
+# Let the SDK absorb transient 429/5xx with exponential backoff (honors
+# Retry-After). Higher than the SDK default of 2 because subscription bearer
+# tokens hit tighter per-window rate limits.
+_MAX_RETRIES = 5
 
 # Map the package's reasoning-effort levels onto Claude's output_config.effort.
 _EFFORT_MAP = {
@@ -55,11 +60,23 @@ def _build_client(anthropic: Any, auth: str, api_key: str | None) -> tuple[Any, 
     """Return (client, is_bearer_auth)."""
     if is_native_auth(auth):
         token = get_claude_auth_token()
-        if token:
-            return anthropic.Anthropic(auth_token=token), True
-        # No explicit token: let the SDK resolve a `claude` / `ant` login profile.
-        return anthropic.Anthropic(), True
-    return anthropic.Anthropic(api_key=get_claude_api_key(api_key)), False
+        if not token:
+            raise RuntimeError(
+                "Claude native auth (MARKER_AUTH=auth) needs a subscription bearer "
+                "token, but none was visible to this process. Create one with "
+                "`claude setup-token`, then put it where the run can see it — most "
+                "reliably as a line in the project .env file:\n"
+                "    CLAUDE_CODE_OAUTH_TOKEN=<token>\n"
+                "A shell `export CLAUDE_CODE_OAUTH_TOKEN=...` also works, but only in "
+                "that same shell (a bare `VAR=...` without `export` is NOT inherited "
+                "by run_tests.sh). ANTHROPIC_AUTH_TOKEN is accepted too. To use an API "
+                "key instead, set MARKER_AUTH=api with ANTHROPIC_API_KEY."
+            )
+        return anthropic.Anthropic(auth_token=token, max_retries=_MAX_RETRIES), True
+    return (
+        anthropic.Anthropic(api_key=get_claude_api_key(api_key), max_retries=_MAX_RETRIES),
+        False,
+    )
 
 
 def _image_block(path: str | Path) -> dict[str, Any]:
@@ -104,7 +121,16 @@ def call_json(
     if is_bearer:
         kwargs["extra_headers"] = {"anthropic-beta": _OAUTH_BETA}
 
-    response = client.messages.create(**kwargs)
+    try:
+        response = client.messages.create(**kwargs)
+    except anthropic.RateLimitError as exc:
+        raise RuntimeError(
+            "Claude rate limit hit (HTTP 429) after automatic retries. Subscription "
+            "bearer tokens (`claude setup-token`) have tighter limits than API keys. "
+            "Wait for the limit window to reset and retry, run a smaller job (one "
+            "image, add --no-refine, drop --steps/--crop), or switch to MARKER_AUTH=api "
+            "with ANTHROPIC_API_KEY."
+        ) from exc
 
     if getattr(response, "stop_reason", None) == "refusal":
         raise RuntimeError("Claude declined the request (stop_reason=refusal).")

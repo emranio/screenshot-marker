@@ -23,7 +23,8 @@ _FALLBACK_PROVIDER: Provider = "codex"
 #               codex  : a local `codex login` (ChatGPT/Codex subscription)
 #               gemini : Vertex AI via Google Cloud Application Default Creds
 #               claude : a Claude subscription bearer token (ANTHROPIC_AUTH_TOKEN
-#                        / CLAUDE_CODE_OAUTH_TOKEN) or a `claude`/`ant` login
+#                        / CLAUDE_CODE_OAUTH_TOKEN); create one with
+#                        `claude setup-token`
 #   "api"  -> an explicit API key
 #               codex  : CODEX_API_KEY / OPENAI_API_KEY
 #               gemini : GEMINI_API_KEY / GOOGLE_API_KEY
@@ -191,16 +192,18 @@ def get_claude_api_key(api_key: str | None = None) -> str:
     if not key:
         raise RuntimeError(
             "API auth requires ANTHROPIC_API_KEY or CLAUDE_API_KEY. "
-            "For subscription auth, use MARKER_AUTH=auth with ANTHROPIC_AUTH_TOKEN "
-            "(or a `claude` / `ant` login)."
+            "For subscription auth, use MARKER_AUTH=auth with a bearer token from "
+            "`claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN)."
         )
     return key
 
 
 def get_claude_auth_token() -> str | None:
-    """Bearer token for Claude native auth, or None to use default credential resolution."""
+    """Bearer token for Claude native auth (from `claude setup-token`), or None if unset."""
     load_env()
-    return os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    # Strip stray whitespace/newlines (common when set via `$(claude setup-token)`).
+    return token.strip() or None if token else None
 
 
 def get_api_key(provider: str, api_key: str | None = None) -> str:

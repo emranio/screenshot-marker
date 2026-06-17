@@ -204,7 +204,7 @@ class CodexSdkPathTests(unittest.TestCase):
             with patch(
                 "marker.vision._load_codex_sdk",
                 return_value=fake_classes,
-            ), patch.dict(
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
                 os.environ,
                 {
                     "OPENAI_API_KEY": "sk-test",
@@ -257,7 +257,7 @@ class CodexSdkPathTests(unittest.TestCase):
             with patch(
                 "marker.vision._load_codex_sdk",
                 return_value=fake_classes,
-            ), patch.dict(
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
                 os.environ,
                 {"OPENAI_API_KEY": "openai-api-key"},
                 clear=True,
@@ -469,6 +469,24 @@ class ProviderConfigTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "ANTHROPIC_API_KEY or CLAUDE_API_KEY"):
                 config.get_claude_api_key()
+
+    def test_get_claude_auth_token_reads_either_env_and_strips(self) -> None:
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "  oat-tok\n"}, clear=True
+        ):
+            self.assertEqual(config.get_claude_auth_token(), "oat-tok")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"ANTHROPIC_AUTH_TOKEN": "ant-tok"}, clear=True
+        ):
+            self.assertEqual(config.get_claude_auth_token(), "ant-tok")
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "   "}, clear=True
+        ):
+            self.assertIsNone(config.get_claude_auth_token())
+        with patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            self.assertIsNone(config.get_claude_auth_token())
 
     def test_get_gemini_api_key_accepts_either_env(self) -> None:
         with patch("marker.config.load_env", lambda: None), patch.dict(
@@ -718,9 +736,61 @@ class ClaudeProviderTests(unittest.TestCase):
             "oauth-2025-04-20",
         )
 
+    def test_rate_limit_error_becomes_actionable_runtimeerror(self) -> None:
+        captured: dict[str, object] = {}
+        fake_anthropic = _fake_anthropic_module(captured, "", raise_rate_limit=True)
 
-def _fake_anthropic_module(captured: dict[str, object], response_text: str) -> object:
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            Image.new("RGB", (2, 2), "white").save(image_file.name)
+            with patch(
+                "marker.providers.claude._load_anthropic", return_value=fake_anthropic
+            ), patch("marker.config.load_env", lambda: None), patch.dict(
+                os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=True
+            ):
+                from marker.providers import claude
+
+                with self.assertRaisesRegex(RuntimeError, "rate limit"):
+                    claude.call_json(
+                        image_paths=[image_file.name],
+                        system_prompt="sys",
+                        user_text="user",
+                        model="claude-opus-4-8",
+                        output_schema=vision.RESPONSE_SCHEMA,
+                        auth="api",
+                    )
+
+        # The client is configured with retries so the SDK backs off before this.
+        self.assertEqual(captured["max_retries"], claude._MAX_RETRIES)
+
+    def test_native_auth_without_token_raises_actionable_error(self) -> None:
+        fake_anthropic = _fake_anthropic_module({}, json.dumps(RAW_RESPONSE))
+        with patch(
+            "marker.providers.claude._load_anthropic", return_value=fake_anthropic
+        ), patch("marker.config.load_env", lambda: None), patch.dict(
+            os.environ, {}, clear=True
+        ):
+            from marker.providers import claude
+
+            with self.assertRaisesRegex(RuntimeError, "claude setup-token"):
+                claude.call_json(
+                    image_paths=["tests/screens/test_1.jpeg"],
+                    system_prompt="sys",
+                    user_text="user",
+                    model="claude-opus-4-8",
+                    output_schema=vision.RESPONSE_SCHEMA,
+                    auth="auth",
+                )
+
+
+def _fake_anthropic_module(
+    captured: dict[str, object],
+    response_text: str,
+    raise_rate_limit: bool = False,
+) -> object:
     import types as _types
+
+    class RateLimitError(Exception):
+        pass
 
     class FakeBlock:
         def __init__(self, text: str) -> None:
@@ -735,15 +805,25 @@ def _fake_anthropic_module(captured: dict[str, object], response_text: str) -> o
     class FakeMessages:
         def create(self, **kwargs: object) -> FakeMessage:
             captured["create_kwargs"] = kwargs
+            if raise_rate_limit:
+                raise RateLimitError("429")
             return FakeMessage(response_text)
 
     class FakeAnthropic:
-        def __init__(self, *, api_key: str | None = None, auth_token: str | None = None) -> None:
+        def __init__(
+            self,
+            *,
+            api_key: str | None = None,
+            auth_token: str | None = None,
+            max_retries: int | None = None,
+            **_: object,
+        ) -> None:
             captured["api_key"] = api_key
             captured["auth_token"] = auth_token
+            captured["max_retries"] = max_retries
             self.messages = FakeMessages()
 
-    return _types.SimpleNamespace(Anthropic=FakeAnthropic)
+    return _types.SimpleNamespace(Anthropic=FakeAnthropic, RateLimitError=RateLimitError)
 
 
 def _fake_codex_classes(captured: dict[str, object], final_response: str) -> tuple[type, type, type]:

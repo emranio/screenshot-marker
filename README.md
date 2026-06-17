@@ -115,17 +115,19 @@ export MARKER_AUTH=api
 export ANTHROPIC_API_KEY=sk-ant-...   # CLAUDE_API_KEY also works
 ```
 
-…or native auth via a Claude subscription bearer token:
+…or native auth via a Claude subscription bearer token. Generate one with
+`claude setup-token`, then:
 
 ```bash
 export MARKER_PROVIDER=claude
 export MARKER_AUTH=auth
-export ANTHROPIC_AUTH_TOKEN=...        # CLAUDE_CODE_OAUTH_TOKEN also works
+export CLAUDE_CODE_OAUTH_TOKEN=...     # ANTHROPIC_AUTH_TOKEN also works
 ```
 
-When `MARKER_AUTH=auth` and no token is set, the SDK falls back to a local
-`claude` / `ant` login profile. `MODEL` (default `claude-opus-4-8`) selects the
-model, and `REASONING_EFFORT` / `--reasoning-effort` maps to Claude's `effort`.
+Native auth requires this token — the Anthropic SDK does **not** read a local
+`claude` login from disk, so `MARKER_AUTH=auth` with no token raises a clear
+error. `MODEL` (default `claude-opus-4-8`) selects the model, and
+`REASONING_EFFORT` / `--reasoning-effort` maps to Claude's `effort`.
 
 ### Model and reasoning effort
 
