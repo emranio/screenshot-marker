@@ -185,6 +185,15 @@ OUTPUT FORMAT — FOLLOW EXACTLY. NO EXCEPTIONS.
    nearness to the bbox beats roominess. Only move the label one capsule-width
    further out (still on the nearest viable side) if every immediately-adjacent
    side would overlap protected content.
+   MULTIPLE NEARBY LABELS: you see every request in this one call, so place all
+   label_positions as a set, not one at a time. When several annotations target
+   elements that sit close together, their capsules tend to crowd or collide.
+   Keep a clear gap between EVERY pair of capsules: no touching, no overlap, no
+   hairline gap. When two labels would land too close, separate them: send each
+   to a different side of its own box (e.g. one above, one below), or slide one a
+   little further along its edge, until both read cleanly. Each capsule still
+   stays nearest to its OWN target: spread them just enough to not crowd, do not
+   fling a label across the image to make room.
    Arrows are added automatically by the renderer (on by default whenever a
    label sits apart from its target). Do NOT reason about arrows — there is no
    arrow field to return.
@@ -737,7 +746,11 @@ Decision rules:
   attached to a nearby label instead of the requested target, missing an edge,
   too tight, too loose, or covering a neighboring row/card/control.
 - Return decision="redraw" when a label covers important UI content, covers its
-  own target, or overlaps another label.
+  own target, overlaps another label, or sits too close to another label
+  (touching it or with only a hairline gap between the two capsules). When
+  correcting crowded labels, spread them apart: move them to different sides of
+  their boxes or slide one along its edge until every pair of capsules has a
+  clear gap, keeping each label nearest to its own target.
 - Return decision="redraw" when a label sits farther from its target than
   necessary — in distant whitespace, a far corner, or the page margin — while a
   nearer edge of the bbox had room. Also redraw when a label is crammed against
