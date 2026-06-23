@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import get_gemini_api_key, get_vertex_config, is_native_auth
+from ..usage import UsageMeter
 
 
 def _load_genai() -> tuple[Any, Any]:
@@ -114,6 +115,30 @@ def _build_client(genai: Any, auth: str, api_key: str | None) -> Any:
     return genai.Client(api_key=get_gemini_api_key(api_key))
 
 
+def _record_usage(meter: UsageMeter | None, response: Any, model: str) -> None:
+    """Record token usage from ``response.usage_metadata``.
+
+    Gemini bills thinking (``thoughts_token_count``) at the output rate, so it is
+    folded into output tokens. Cached input is reported separately.
+    """
+    if meter is None:
+        return
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        meter.record(model=model)
+        return
+    prompt = getattr(usage, "prompt_token_count", None) or 0
+    candidates = getattr(usage, "candidates_token_count", None) or 0
+    thoughts = getattr(usage, "thoughts_token_count", None) or 0
+    cached = getattr(usage, "cached_content_token_count", None) or 0
+    meter.record(
+        model=model,
+        input_tokens=int(prompt),
+        output_tokens=int(candidates) + int(thoughts),
+        cached_tokens=int(cached),
+    )
+
+
 def _image_part(path: str | Path, types: Any) -> Any:
     resolved = Path(path).expanduser().resolve()
     mime = mimetypes.guess_type(resolved.name)[0] or "image/png"
@@ -130,6 +155,7 @@ def call_json(
     auth: str,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     genai, types = _load_genai()
     client = _build_client(genai, auth, api_key)
@@ -152,6 +178,8 @@ def call_json(
         contents=[types.Content(role="user", parts=parts)],
         config=config,
     )
+
+    _record_usage(meter, response, model)
 
     text = getattr(response, "text", None)
     if not text:

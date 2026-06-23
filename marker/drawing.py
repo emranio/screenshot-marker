@@ -462,11 +462,37 @@ def _fit_label_at_position(
     pad_x: int,
     pad_y: int,
     draw: ImageDraw.ImageDraw,
+    avoid_label_rects: list[tuple[float, float, float, float]] | None = None,
+    avoid_target_rects: list[tuple[float, float, float, float]] | None = None,
 ) -> dict | None:
-    """Fit a label near a model-provided preferred rectangle."""
+    """Fit a label near a model-provided preferred rectangle.
+
+    The model decides the preferred spot, but several preferred spots can land
+    on top of each other when their targets are close. This fitter therefore
+    treats the model rectangle as a starting point and nudges the capsule off it
+    (up/down/left/right) to dodge already-placed labels and other targets, while
+    penalizing drift so it stays as near the requested spot as possible. If even
+    the best nudged spot still overlaps another label, it returns None so the
+    caller falls back to the bbox-anchored collision-aware fitter.
+    """
     img_w, img_h = image_size
     if label_position.width <= 0 or label_position.height <= 0:
         return None
+
+    label_avoids = list(avoid_label_rects or [])
+    target_avoids = list(avoid_target_rects or [])
+    collision_pad = max(8, margin)
+
+    def label_overlap(rect: tuple[float, float, float, float]) -> float:
+        return sum(_rect_overlap_area(rect, a, collision_pad) for a in label_avoids)
+
+    def collision_score(rect: tuple[float, float, float, float]) -> float:
+        rect_area = max(1.0, (rect[2] - rect[0]) * (rect[3] - rect[1]))
+        target_overlap = sum(
+            _rect_overlap_area(rect, a, collision_pad) for a in target_avoids
+        )
+        target_ratio = min(1.0, target_overlap / rect_area)
+        return label_overlap(rect) * 1000 + target_ratio * 120
 
     max_image_bg_w = max(1, img_w - 2 * margin)
     max_image_bg_h = max(1, img_h - 2 * margin)
@@ -486,6 +512,7 @@ def _fit_label_at_position(
     line_options = (1, 2, 3, 4)
     best_layout: dict | None = None
     best_score: float | None = None
+    best_label_overlap: float = 0.0
 
     for limit_w, limit_h, expansion_penalty in limit_options:
         max_text_w = limit_w - pad_x * 2
@@ -505,36 +532,54 @@ def _fit_label_at_position(
 
                 bg_w = min(limit_w, w + pad_x * 2)
                 bg_h = min(limit_h, h + pad_y * 2)
-                bg_x0 = label_position.x
-                bg_y0 = label_position.y
-                bg_x0 = max(margin, min(bg_x0, img_w - bg_w - margin))
-                bg_y0 = max(margin, min(bg_y0, img_h - bg_h - margin))
-                lx = bg_x0 + pad_x
-                ly = bg_y0 + pad_y
-                position_drift = math.hypot(
-                    bg_x0 - label_position.x,
-                    bg_y0 - label_position.y,
-                )
-                score = (
-                    expansion_penalty
-                    + scale_index * 12
-                    + line_index * 6
-                    + position_drift * 0.2
-                )
-                layout = {
-                    "font": font,
-                    "lines": lines,
-                    "text_w": w,
-                    "text_h": h,
-                    "lx": lx,
-                    "ly": ly,
-                    "bg_rect": (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h),
-                    "vertical": "manual",
-                    "horizontal": "manual",
-                }
-                if best_score is None or score < best_score:
-                    best_score = score
-                    best_layout = layout
+
+                # The model spot is offset (0, 0); the rest are escape nudges
+                # along the capsule's own size so it can clear a neighbour.
+                dv = bg_h + max(pad_y * 2, 12)
+                dh = bg_w * 0.6 + max(pad_x, 12)
+                offsets = [
+                    (0, 0),
+                    (0, dv), (0, -dv), (dh, 0), (-dh, 0),
+                    (dh, dv), (-dh, dv), (dh, -dv), (-dh, -dv),
+                    (0, 2 * dv), (0, -2 * dv), (2 * dh, 0), (-2 * dh, 0),
+                    (0, 3 * dv), (0, -3 * dv),
+                ]
+                for off_x, off_y in offsets:
+                    bg_x0 = max(margin, min(label_position.x + off_x, img_w - bg_w - margin))
+                    bg_y0 = max(margin, min(label_position.y + off_y, img_h - bg_h - margin))
+                    lx = bg_x0 + pad_x
+                    ly = bg_y0 + pad_y
+                    bg_rect = (bg_x0, bg_y0, bg_x0 + bg_w, bg_y0 + bg_h)
+                    position_drift = math.hypot(
+                        bg_x0 - label_position.x,
+                        bg_y0 - label_position.y,
+                    )
+                    score = (
+                        collision_score(bg_rect)
+                        + expansion_penalty
+                        + scale_index * 12
+                        + line_index * 6
+                        + position_drift * 0.2
+                    )
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_label_overlap = label_overlap(bg_rect)
+                        best_layout = {
+                            "font": font,
+                            "lines": lines,
+                            "text_w": w,
+                            "text_h": h,
+                            "lx": lx,
+                            "ly": ly,
+                            "bg_rect": bg_rect,
+                            "vertical": "manual",
+                            "horizontal": "manual",
+                        }
+
+    # Couldn't dodge a sibling label even after nudging — let the bbox-anchored
+    # fitter (which searches more anchors around the target) try instead.
+    if best_layout is not None and label_avoids and best_label_overlap > 1.0:
+        return None
 
     return best_layout
 
@@ -908,6 +953,8 @@ def render(
                 label_pad_x,
                 label_pad_y,
                 measure_draw,
+                avoid_label_rects=avoid_label_rects,
+                avoid_target_rects=avoid_target_rects,
             )
         if layout is None:
             layout = _fit_label(

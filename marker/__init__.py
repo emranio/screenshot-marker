@@ -4,9 +4,10 @@ import base64
 import io
 import math
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PIL import Image
 
@@ -28,9 +29,11 @@ from .models import (
     Bbox,
 )
 from .parser import parse_response
+from .progress import Progress
+from .usage import UsageMeter
 from .vision import (
     call_vision,
-    determine_crop_region,
+    determine_crop_region_for_queries,
     image_size,
     refine_bbox_call,
     run_annotation_step,
@@ -67,6 +70,7 @@ def annotate(
     api_key: str | None = None,
     reasoning_effort: str | None = None,
     steps: int = 0,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> AnnotationResult:
     """Annotate ``image_path`` with one or more natural-language ``queries``.
 
@@ -90,14 +94,23 @@ def annotate(
     Returns an :class:`AnnotationResult` with the resolved annotations, the
     output path, and the list of queries the model could not locate.
 
-    When ``crop`` is True, a final vision call picks a focus rectangle around the
-    drawn annotations and the rendered PNG is cropped down to it (with
-    ``crop_padding`` margin so the result is never tight). Annotation coordinates
-    in the returned result stay in the original image's coordinate space.
+    When ``crop`` is True, a vision call runs FIRST (before locating anything):
+    it picks a focus rectangle holding all the query targets plus surrounding
+    context, the source image is cropped to it (with ``crop_padding`` margin so
+    it is never tight), and the whole locate/refine/render pipeline then runs on
+    that smaller crop. This sharply improves bbox accuracy on large/tall
+    screenshots. Returned annotation coordinates are in the cropped image's
+    space (which is what the saved output shows). Falls back to the full image
+    when no usable region is returned.
 
     ``steps`` is the number of review/correction passes (0 disables review).
     Each pass re-renders the corrected annotations and the next pass validates
     that render; the loop stops early as soon as a pass accepts the result.
+
+    ``on_progress`` is an optional callable that receives one preformatted
+    ``[i/total] ...`` line per pipeline stage (and indented sub-steps). The CLI
+    wires this to stderr so a run streams what it is doing; pass ``None`` (the
+    default) to stay silent.
     """
     if not queries:
         raise ValueError("queries must contain at least one annotation request.")
@@ -109,54 +122,102 @@ def annotate(
     image_path = Path(image_path)
     output_path = Path(output_path) if output_path is not None else _default_output_path(image_path)
 
-    if steps:
-        result = _annotate_with_steps(
-            image_path=image_path,
-            queries=queries,
-            output_path=output_path,
-            model=resolved_model,
-            color=color,
-            stroke_width=stroke_width,
-            font_path=font_path,
-            refine=refine,
-            refine_padding=refine_padding,
-            draw_arrows=draw_arrows,
-            provider=resolved_provider,
-            auth=resolved_auth,
-            api_key=api_key,
-            reasoning_effort=resolved_effort,
-            steps=steps,
-        )
-    else:
-        result = _annotate_once(
-            image_path=image_path,
-            queries=queries,
-            output_path=output_path,
-            model=resolved_model,
-            color=color,
-            stroke_width=stroke_width,
-            font_path=font_path,
-            refine=refine,
-            refine_padding=refine_padding,
-            draw_arrows=draw_arrows,
-            provider=resolved_provider,
-            auth=resolved_auth,
-            api_key=api_key,
-            reasoning_effort=resolved_effort,
-        )
+    progress = Progress(
+        _plan_total(refine=refine, steps=steps, crop=crop),
+        sink=on_progress,
+    )
+    meter = UsageMeter()
+    started = time.monotonic()
 
+    # Crop FIRST (before locating): the model frames the region holding the
+    # query targets on the original image, we crop the source to it, and the
+    # whole locate/refine/render pipeline then runs on that smaller crop —
+    # bbox grounding is far more accurate on a focused image than on a tall or
+    # large full screenshot. All result coordinates are in the cropped image's
+    # space, which is exactly what the saved (cropped) output shows.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    work_path = image_path
+    crop_tmp: "tempfile.TemporaryDirectory | None" = None
     if crop:
-        _apply_crop(
-            result,
+        work_path, crop_tmp = _crop_source_first(
+            image_path,
+            queries,
+            output_path.parent,
             crop_padding=crop_padding,
             model=resolved_model,
             provider=resolved_provider,
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
+            progress=progress,
+            meter=meter,
         )
 
+    try:
+        if steps:
+            result = _annotate_with_steps(
+                image_path=work_path,
+                queries=queries,
+                output_path=output_path,
+                model=resolved_model,
+                color=color,
+                stroke_width=stroke_width,
+                font_path=font_path,
+                refine=refine,
+                refine_padding=refine_padding,
+                draw_arrows=draw_arrows,
+                provider=resolved_provider,
+                auth=resolved_auth,
+                api_key=api_key,
+                reasoning_effort=resolved_effort,
+                steps=steps,
+                progress=progress,
+                meter=meter,
+            )
+        else:
+            result = _annotate_once(
+                image_path=work_path,
+                queries=queries,
+                output_path=output_path,
+                model=resolved_model,
+                color=color,
+                stroke_width=stroke_width,
+                font_path=font_path,
+                refine=refine,
+                refine_padding=refine_padding,
+                draw_arrows=draw_arrows,
+                provider=resolved_provider,
+                auth=resolved_auth,
+                api_key=api_key,
+                reasoning_effort=resolved_effort,
+                progress=progress,
+                meter=meter,
+            )
+    finally:
+        if crop_tmp is not None:
+            crop_tmp.cleanup()
+
+    progress.summary(meter.summary_lines(time.monotonic() - started))
+
     return result
+
+
+def _plan_total(*, refine: bool, steps: int, crop: bool) -> int:
+    """Planned stage count for the progress counter.
+
+    The initial render always reads the image, locates the queries, and renders
+    (3); refinement, each review pass, and the crop add one apiece. Review
+    passes are the maximum — the loop may stop early, so the counter can finish
+    below this total, which is fine.
+    """
+    total = 2  # read image + locate/parse
+    if refine:
+        total += 1
+    total += 1  # render & save
+    total += steps  # up to `steps` review passes
+    if crop:
+        total += 1
+    return total
 
 
 def _annotate_once(
@@ -175,49 +236,67 @@ def _annotate_once(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
+    progress: Progress,
+    meter: UsageMeter,
 ) -> AnnotationResult:
-    width, height = image_size(image_path)
-    raw = call_vision(
-        image_path,
-        width,
-        height,
-        queries,
-        model,
-        provider=provider,
-        auth=auth,
-        api_key=api_key,
-        reasoning_effort=reasoning_effort,
-    )
-    annotations, unresolved = parse_response(raw, queries, width, height)
+    with progress.stage("Reading image"):
+        width, height = image_size(image_path)
+        progress.note(f"{width}×{height}px")
 
-    if refine:
-        with Image.open(image_path) as src:
-            annotations = _refine_bboxes(
-                src,
-                annotations,
-                model=model,
-                padding=refine_padding,
-                provider=provider,
-                auth=auth,
-                api_key=api_key,
-                reasoning_effort=reasoning_effort,
-            )
-
-    stroke = stroke_width if stroke_width is not None else auto_stroke_width(width, height)
-    font = resolve_font_path(font_path)
-
-    with Image.open(image_path) as src:
-        annotated = render(
-            src,
-            annotations,
-            default_color=color,
-            stroke_width=stroke,
-            font_path=font,
-            draw_arrows=draw_arrows,
+    with progress.stage(f"Locating {len(queries)} annotation(s)"):
+        raw = call_vision(
+            image_path,
+            width,
+            height,
+            queries,
+            model,
+            provider=provider,
+            auth=auth,
+            api_key=api_key,
+            reasoning_effort=reasoning_effort,
+            meter=meter,
+        )
+        annotations, unresolved = parse_response(raw, queries, width, height)
+        progress.note(
+            f"{len(annotations) - len(unresolved)} resolved, {len(unresolved)} unresolved"
         )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    annotated.save(output_path, format="PNG")
+    if refine:
+        refinable = sum(
+            1 for a in annotations if not a.not_found and a.bbox is not None
+        )
+        with progress.stage(f"Refining {refinable} box(es)"):
+            with Image.open(image_path) as src:
+                annotations = _refine_bboxes(
+                    src,
+                    annotations,
+                    model=model,
+                    padding=refine_padding,
+                    provider=provider,
+                    auth=auth,
+                    api_key=api_key,
+                    reasoning_effort=reasoning_effort,
+                    progress=progress,
+                    meter=meter,
+                )
+
+    with progress.stage("Rendering & saving"):
+        stroke = stroke_width if stroke_width is not None else auto_stroke_width(width, height)
+        font = resolve_font_path(font_path)
+
+        with Image.open(image_path) as src:
+            annotated = render(
+                src,
+                annotations,
+                default_color=color,
+                stroke_width=stroke,
+                font_path=font,
+                draw_arrows=draw_arrows,
+            )
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        annotated.save(output_path, format="PNG")
+        progress.note(str(output_path))
 
     return AnnotationResult(
         output_path=output_path,
@@ -243,6 +322,8 @@ def _annotate_with_steps(
     api_key: str | None,
     reasoning_effort: str,
     steps: int,
+    progress: Progress,
+    meter: UsageMeter,
 ) -> AnnotationResult:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     width, height = image_size(image_path)
@@ -268,38 +349,46 @@ def _annotate_with_steps(
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            progress=progress,
+            meter=meter,
         )
 
         # Up to ``steps`` review passes. Each pass validates the current render;
         # on "accept" we stop early, otherwise we apply its corrections, re-render
         # the candidate, and the next pass reviews that corrected image.
-        for _ in range(max(1, steps)):
-            step = run_annotation_step(
-                rendered_image_path=candidate_path,
-                queries=queries,
-                annotations_json=_annotations_json(candidate),
-                width=width,
-                height=height,
-                model=model,
-                provider=provider,
-                auth=auth,
-                api_key=api_key,
-                reasoning_effort=reasoning_effort,
-            )
-            if step.get("decision") == "accept":
-                break
+        total_passes = max(1, steps)
+        for i in range(total_passes):
+            with progress.stage(f"Review pass {i + 1}/{total_passes}"):
+                step = run_annotation_step(
+                    rendered_image_path=candidate_path,
+                    queries=queries,
+                    annotations_json=_annotations_json(candidate),
+                    width=width,
+                    height=height,
+                    model=model,
+                    provider=provider,
+                    auth=auth,
+                    api_key=api_key,
+                    reasoning_effort=reasoning_effort,
+                    meter=meter,
+                )
+                decision = step.get("decision")
+                if decision == "accept":
+                    progress.note("accepted — stopping early")
+                    break
 
-            candidate = _apply_step_annotations(candidate, step, width, height)
-            _render_result(
-                image_path=image_path,
-                output_path=candidate_path,
-                annotations=candidate.annotations,
-                color=color,
-                stroke_width=stroke_width,
-                font_path=font_path,
-                draw_arrows=draw_arrows,
-            )
-            candidate = candidate.model_copy(update={"output_path": candidate_path})
+                progress.note("redraw — applying corrections")
+                candidate = _apply_step_annotations(candidate, step, width, height)
+                _render_result(
+                    image_path=image_path,
+                    output_path=candidate_path,
+                    annotations=candidate.annotations,
+                    color=color,
+                    stroke_width=stroke_width,
+                    font_path=font_path,
+                    draw_arrows=draw_arrows,
+                )
+                candidate = candidate.model_copy(update={"output_path": candidate_path})
 
         return _promote_candidate(candidate, candidate_path, output_path)
 
@@ -417,6 +506,7 @@ def _refine_one(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
+    meter: UsageMeter | None = None,
 ) -> Annotation:
     if annotation.not_found or annotation.bbox is None:
         return annotation
@@ -431,6 +521,7 @@ def _refine_one(
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
+        meter=meter,
     )
     if refined is None:
         return annotation
@@ -461,52 +552,43 @@ def _refine_bboxes(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
+    progress: Progress,
+    meter: UsageMeter | None = None,
 ) -> list[Annotation]:
     if not annotations:
         return annotations
     rgb = image.convert("RGB")
+    # Only resolvable boxes hit the model; not_found items pass through unchanged.
+    targets = [i for i, a in enumerate(annotations) if not a.not_found and a.bbox is not None]
+    if not targets:
+        return annotations
+
+    results = list(annotations)
     max_workers = 2
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(annotations))) as pool:
-        return list(
-            pool.map(
-                lambda ann: _refine_one(
-                    rgb,
-                    ann,
-                    model=model,
-                    padding=padding,
-                    provider=provider,
-                    auth=auth,
-                    api_key=api_key,
-                    reasoning_effort=reasoning_effort,
-                ),
-                annotations,
-            )
-        )
-
-
-def _annotation_rects(annotation: Annotation) -> list[tuple[float, float, float, float]]:
-    """Drawn rectangles (bbox + label capsule) for one resolved annotation."""
-    rects: list[tuple[float, float, float, float]] = []
-    if annotation.not_found:
-        return rects
-    if annotation.bbox is not None:
-        b = annotation.bbox
-        rects.append((b.x, b.y, b.x + b.width, b.y + b.height))
-    if annotation.label_position is not None:
-        lp = annotation.label_position
-        rects.append((lp.x, lp.y, lp.x + lp.width, lp.y + lp.height))
-    return rects
-
-
-def _union_rects(
-    rects: list[tuple[float, float, float, float]],
-) -> tuple[float, float, float, float]:
-    return (
-        min(r[0] for r in rects),
-        min(r[1] for r in rects),
-        max(r[2] for r in rects),
-        max(r[3] for r in rects),
-    )
+    done = 0
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(targets))) as pool:
+        futures = {
+            pool.submit(
+                _refine_one,
+                rgb,
+                annotations[i],
+                model=model,
+                padding=padding,
+                provider=provider,
+                auth=auth,
+                api_key=api_key,
+                reasoning_effort=reasoning_effort,
+                meter=meter,
+            ): i
+            for i in targets
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            results[i] = future.result()
+            done += 1
+            label = results[i].label_text or results[i].request_text
+            progress.note(f"{done}/{len(targets)}: {label[:60]}")
+    return results
 
 
 def _pad_and_clamp(
@@ -530,19 +612,10 @@ def _pad_and_clamp(
     return nx0, ny0, nx1, ny1
 
 
-def _crop_annotations_summary(annotations: list[Annotation]) -> str:
-    lines: list[str] = []
-    for ann in annotations:
-        if ann.not_found or ann.bbox is None:
-            continue
-        b = ann.bbox
-        label = f" label={ann.label_text!r}" if ann.label_text else ""
-        lines.append(f"- box at x={b.x}, y={b.y}, w={b.width}, h={b.height}{label}")
-    return "\n".join(lines) if lines else "(no resolved annotations)"
-
-
-def _apply_crop(
-    result: AnnotationResult,
+def _crop_source_first(
+    image_path: Path,
+    queries: list[str],
+    output_dir: Path,
     *,
     crop_padding: float,
     model: str,
@@ -550,45 +623,54 @@ def _apply_crop(
     auth: AuthMode,
     api_key: str | None,
     reasoning_effort: str,
-) -> None:
-    """Crop the rendered output to a model-chosen focus region around the drawn
-    annotations, padded so it never looks tight. No-op when nothing was drawn."""
-    output_path = Path(result.output_path)
-    if not output_path.is_file():
-        return
+    progress: Progress,
+    meter: UsageMeter,
+) -> tuple[Path, "tempfile.TemporaryDirectory | None"]:
+    """Crop the SOURCE image down to the region holding the query targets, before
+    any annotation runs. The model picks a focus region from the request text on
+    the original image; locating the boxes on the smaller crop is far more
+    accurate than on a tall/large full screenshot.
 
-    drawn = [rect for ann in result.annotations for rect in _annotation_rects(ann)]
-    if not drawn:
-        # Nothing resolved → nothing to focus on; leave the full image as-is.
-        return
-
-    with Image.open(output_path) as rendered:
-        img_w, img_h = rendered.size
-        content = _union_rects(drawn)
-
-        region = determine_crop_region(
-            output_path,
-            _crop_annotations_summary(result.annotations),
-            img_w,
-            img_h,
+    Returns ``(working_image_path, tmpdir)``. ``tmpdir`` is the temp directory
+    holding the cropped image (the caller cleans it up once the run is done) or
+    ``None`` when no crop was applied — in which case the original ``image_path``
+    is returned and the pipeline runs on the full image as before.
+    """
+    with progress.stage("Choosing crop region"):
+        width, height = image_size(image_path)
+        region = determine_crop_region_for_queries(
+            image_path,
+            queries,
+            width,
+            height,
             model,
             provider=provider,
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            meter=meter,
         )
-        if region is not None:
-            agent_rect = (
-                region.x * img_w,
-                region.y * img_h,
-                (region.x + region.width) * img_w,
-                (region.y + region.height) * img_h,
-            )
-            # Union with the drawn content so the agent region can never clip a box.
-            content = _union_rects([content, agent_rect])
+        if region is None:
+            progress.note("no usable region — annotating full image")
+            return image_path, None
 
-        box = _pad_and_clamp(content, img_w, img_h, crop_padding)
-        if box == (0, 0, img_w, img_h):
-            return
-        cropped = rendered.crop(box)
-        cropped.save(output_path, format="PNG")
+        rect = (
+            region.x * width,
+            region.y * height,
+            (region.x + region.width) * width,
+            (region.y + region.height) * height,
+        )
+        box = _pad_and_clamp(rect, width, height, crop_padding)
+        if box == (0, 0, width, height):
+            progress.note("region spans full image — no crop")
+            return image_path, None
+
+        tmpdir = tempfile.TemporaryDirectory(
+            prefix=f".{image_path.stem}-crop-",
+            dir=output_dir,
+        )
+        cropped_path = Path(tmpdir.name) / "source.png"
+        with Image.open(image_path) as src:
+            src.crop(box).save(cropped_path, format="PNG")
+        progress.note(f"cropped to {box[2] - box[0]}×{box[3] - box[1]}px")
+        return cropped_path, tmpdir

@@ -111,6 +111,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Never draw arrows. Arrows are drawn by default for labeled annotations.",
     )
     p.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Stream per-stage progress (current/total step, status, timing) to "
+            "stderr. On by default; use --no-progress to silence."
+        ),
+    )
+    p.add_argument(
         "--steps",
         nargs="?",
         const=1,
@@ -155,6 +164,10 @@ def _collect_queries(args: argparse.Namespace) -> list[str]:
     return queries
 
 
+def _stderr_progress(line: str) -> None:
+    print(line, file=sys.stderr, flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     queries = _collect_queries(args)
@@ -174,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         crop=args.crop,
         draw_arrows=not args.no_arrow,
         steps=args.steps,
+        on_progress=_stderr_progress if args.progress else None,
     )
 
     # Structured result on stdout (always JSON), human summary on stderr.

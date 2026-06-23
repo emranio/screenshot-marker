@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import get_claude_api_key, get_claude_auth_token, is_native_auth
+from ..usage import UsageMeter
 
 # Bearer (OAuth/subscription) tokens require this beta header on /v1/messages.
 _OAUTH_BETA = "oauth-2025-04-20"
@@ -79,6 +80,26 @@ def _build_client(anthropic: Any, auth: str, api_key: str | None) -> tuple[Any, 
     )
 
 
+def _record_usage(meter: UsageMeter | None, response: Any, model: str) -> None:
+    """Record token usage from ``response.usage``.
+
+    Anthropic already counts thinking tokens inside ``output_tokens``; cache-read
+    input tokens are reported separately (and still part of ``input_tokens``).
+    """
+    if meter is None:
+        return
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        meter.record(model=model)
+        return
+    meter.record(
+        model=model,
+        input_tokens=int(getattr(usage, "input_tokens", None) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", None) or 0),
+        cached_tokens=int(getattr(usage, "cache_read_input_tokens", None) or 0),
+    )
+
+
 def _image_block(path: str | Path) -> dict[str, Any]:
     resolved = Path(path).expanduser().resolve()
     mime = mimetypes.guess_type(resolved.name)[0] or "image/png"
@@ -96,6 +117,7 @@ def call_json(
     auth: str,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     anthropic = _load_anthropic()
     client, is_bearer = _build_client(anthropic, auth, api_key)
@@ -131,6 +153,8 @@ def call_json(
             "image, add --no-refine, drop --steps/--crop), or switch to MARKER_AUTH=api "
             "with ANTHROPIC_API_KEY."
         ) from exc
+
+    _record_usage(meter, response, model)
 
     if getattr(response, "stop_reason", None) == "refusal":
         raise RuntimeError("Claude declined the request (stop_reason=refusal).")

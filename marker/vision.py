@@ -18,6 +18,7 @@ from .config import (
     resolve_reasoning_effort,
 )
 from .models import NormalizedBbox
+from .usage import UsageMeter
 
 def image_size(path: str | Path) -> tuple[int, int]:
     with Image.open(path) as img:
@@ -312,6 +313,7 @@ def call_vision(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     resolved_provider = resolve_provider(provider)
     resolved_auth = resolve_auth_mode(auth, resolved_provider)
@@ -331,6 +333,7 @@ def call_vision(
         auth=resolved_auth,
         api_key=api_key,
         reasoning_effort=resolved_effort,
+        meter=meter,
     )
 
 
@@ -388,6 +391,7 @@ def _call_codex_json(
     auth: str,
     api_key: str | None,
     reasoning_effort: str | None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     return _run_async(
         _call_codex_json_async(
@@ -399,6 +403,7 @@ def _call_codex_json(
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            meter=meter,
         )
     )
 
@@ -414,6 +419,7 @@ def _call_json(
     auth: str,
     api_key: str | None,
     reasoning_effort: str | None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     """Dispatch one structured-JSON vision call to the selected provider."""
     if provider == "gemini":
@@ -428,6 +434,7 @@ def _call_json(
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            meter=meter,
         )
     if provider == "claude":
         from .providers import claude
@@ -441,6 +448,7 @@ def _call_json(
             auth=auth,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            meter=meter,
         )
     return _call_codex_json(
         image_paths=image_paths,
@@ -451,6 +459,41 @@ def _call_json(
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
+        meter=meter,
+    )
+
+
+def _record_codex_usage(meter: UsageMeter | None, turn: Any, model: str) -> None:
+    """Best-effort: pull token counts off the Agents SDK turn and record them.
+
+    The SDK's usage attribute names have shifted across versions, so probe a few
+    shapes and fall back to counting just the request when none are present.
+    """
+    if meter is None:
+        return
+    usage = getattr(turn, "usage", None) or getattr(turn, "token_usage", None)
+    in_tok = out_tok = cached = 0
+    if usage is not None:
+        in_tok = (
+            getattr(usage, "input_tokens", None)
+            or getattr(usage, "prompt_tokens", None)
+            or 0
+        )
+        out_tok = (
+            getattr(usage, "output_tokens", None)
+            or getattr(usage, "completion_tokens", None)
+            or 0
+        )
+        cached = (
+            getattr(usage, "cached_input_tokens", None)
+            or getattr(usage, "cached_tokens", None)
+            or 0
+        )
+    meter.record(
+        model=model,
+        input_tokens=int(in_tok or 0),
+        output_tokens=int(out_tok or 0),
+        cached_tokens=int(cached or 0),
     )
 
 
@@ -464,6 +507,7 @@ async def _call_codex_json_async(
     auth: str,
     api_key: str | None,
     reasoning_effort: str | None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     Codex, ThreadOptions, TurnOptions = _load_codex_sdk()
     resolved_image_paths = [Path(path).expanduser().resolve() for path in image_paths]
@@ -496,6 +540,7 @@ async def _call_codex_json_async(
     content = getattr(turn, "final_response", None)
     if not content:
         raise RuntimeError("Agents SDK Codex path returned an empty response.")
+    _record_codex_usage(meter, turn, model)
     return json.loads(content)
 
 
@@ -576,6 +621,7 @@ def refine_bbox_call(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> NormalizedBbox | None:
     """Ask the model for a tight bbox of ``target_description`` within a cropped image."""
     resolved_provider = resolve_provider(provider)
@@ -595,19 +641,21 @@ def refine_bbox_call(
                 auth=resolved_auth,
                 api_key=api_key,
                 reasoning_effort=resolved_effort,
+                meter=meter,
             )
         return NormalizedBbox.model_validate(raw)
     except Exception:
         return None
 
 
-CROP_SYSTEM_PROMPT = """You are choosing a CROP RECTANGLE for an annotated UI
-screenshot.
+CROP_SYSTEM_PROMPT = """You are choosing a CROP RECTANGLE for a UI screenshot
+BEFORE any annotation is drawn.
 
-The image already has annotation boxes, labels, and optional arrows drawn on it.
-Your job is to return ONE rectangle that frames all of the annotated content so
-the final image can be cropped down to the region that matters — dropping the
-irrelevant top/bottom/side margins of a tall or wide screenshot.
+You receive a list of annotation requests, each describing a UI element that
+will later be boxed and labeled. The screenshot will be cropped to the rectangle
+you return, and the target elements will then be located precisely WITHIN that
+crop. So the rectangle MUST contain every described target element, with room to
+spare — anything you leave out can never be annotated.
 
 OUTPUT FORMAT — FOLLOW EXACTLY:
 
@@ -620,22 +668,19 @@ OUTPUT FORMAT — FOLLOW EXACTLY:
 
 RULES:
 
-- The rectangle MUST fully contain every drawn annotation box, its label
-  capsule, and any arrow. NEVER clip a drawn element — when unsure, include
-  more.
-- The rectangle MUST also include all the RELATED and IMPORTANT visuals around
-  the annotations — the surrounding UI that gives them meaning. Include the
-  whole card / panel / section / table / form the annotation sits in, its
-  header or title, the column or row headers needed to read it, and any nearby
-  element the annotation refers to or depends on. The crop must still make sense
-  on its own once the rest of the screenshot is gone.
+- The rectangle MUST fully contain EVERY described target element. Missing or
+  clipping a target is the worst possible error — when unsure, include MORE.
+- Also include the RELATED, IMPORTANT surrounding UI that gives the targets
+  meaning: the whole card / panel / section / table / form they sit in, its
+  header or title, and the row/column headers needed to read them. The crop must
+  still make sense on its own once the rest of the screenshot is gone.
 - Do NOT crop tightly. Leave comfortable breathing room on EVERY side so the
-  result does not look cramped: keep a band of surrounding UI / whitespace
-  around the outermost annotation, not a rectangle hugging the boxes.
+  located boxes later have margin — keep a band of surrounding UI / whitespace
+  around the outermost target, not a rectangle hugging it.
 - When in doubt between a smaller and a larger rectangle, choose the LARGER one
-  — losing context is worse than keeping a little extra.
-- If the annotations (or the context they need) are spread across most of the
-  image, just return the whole image: {"x": 0, "y": 0, "width": 1, "height": 1}."""
+  — losing a target or context is far worse than keeping a little extra.
+- If the described targets (or the context they need) are spread across most of
+  the image, return the whole image: {"x": 0, "y": 0, "width": 1, "height": 1}."""
 
 
 def _coerce_normalized_bbox(raw: dict[str, Any]) -> NormalizedBbox | None:
@@ -655,9 +700,9 @@ def _coerce_normalized_bbox(raw: dict[str, Any]) -> NormalizedBbox | None:
     return NormalizedBbox(x=x, y=y, width=w, height=h)
 
 
-def determine_crop_region(
+def determine_crop_region_for_queries(
     image_path: str | Path,
-    annotations_summary: str,
+    queries: list[str],
     width: int,
     height: int,
     model: str,
@@ -666,12 +711,14 @@ def determine_crop_region(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> NormalizedBbox | None:
-    """Ask the model for a focus rectangle framing all drawn annotations.
+    """Ask the model for a focus rectangle holding all the query targets.
 
-    Returns a normalized crop rectangle, or ``None`` if the model could not be
-    reached or returned an unusable answer (the caller then falls back to the
-    union of the drawn annotation rects).
+    Run on the ORIGINAL image before any annotation, so the locate pass can work
+    on the smaller crop. Returns a normalized crop rectangle, or ``None`` if the
+    model could not be reached or returned an unusable answer (the caller then
+    annotates the full image as before).
     """
     resolved_provider = resolve_provider(provider)
     resolved_auth = resolve_auth_mode(auth, resolved_provider)
@@ -680,13 +727,14 @@ def determine_crop_region(
         [
             f"Image dimensions: {width}px wide x {height}px tall.",
             "",
-            "Annotated regions already drawn on the image (absolute pixels):",
-            annotations_summary,
+            "Annotation requests (each describes a target element to be boxed "
+            "and labeled later):",
+            *_format_numbered_queries(queries),
             "",
-            "Return ONE normalized crop rectangle that frames all annotated "
-            "content AND the related, important surrounding visuals (the card / "
-            "panel / section / headers the annotations belong to), with "
-            "comfortable margin on every side.",
+            "Return ONE normalized crop rectangle that fully contains EVERY "
+            "described target element AND the related, important surrounding "
+            "visuals (the card / panel / section / headers they belong to), with "
+            "comfortable margin on every side. When unsure, include more.",
         ]
     )
     try:
@@ -700,6 +748,7 @@ def determine_crop_region(
             auth=resolved_auth,
             api_key=api_key,
             reasoning_effort=resolved_effort,
+            meter=meter,
         )
     except Exception:
         return None
@@ -801,6 +850,7 @@ def run_annotation_step(
     auth: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     user_text = "\n".join(
         [
@@ -829,6 +879,7 @@ def run_annotation_step(
         auth=auth,
         api_key=api_key,
         reasoning_effort=reasoning_effort,
+        meter=meter,
     )
 
 
@@ -847,6 +898,7 @@ def _call_json_with_images(
     auth: str | None,
     api_key: str | None,
     reasoning_effort: str | None,
+    meter: UsageMeter | None = None,
 ) -> dict[str, Any]:
     resolved_provider = resolve_provider(provider)
     resolved_auth = resolve_auth_mode(auth, resolved_provider)
@@ -861,4 +913,5 @@ def _call_json_with_images(
         auth=resolved_auth,
         api_key=api_key,
         reasoning_effort=resolved_effort,
+        meter=meter,
     )

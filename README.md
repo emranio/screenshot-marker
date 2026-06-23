@@ -171,6 +171,28 @@ Output: writes the annotated PNG to the requested path, prints
 the full JSON result to **stdout**, and a one‑line human summary to
 **stderr**.
 
+While it runs, per‑stage progress streams to **stderr** (on by default; pass
+`--no-progress` to silence). Each stage shows `[current/total]`, a ✓/✗ status,
+and elapsed time, and the run ends with a summary block — requests, tokens
+(in/out/cached), an estimated cost, and total wall time. Token and request
+counts come straight from the provider SDK; the dollar figure is an estimate
+from a built‑in price table (edit `marker/usage.py` or set `MARKER_PRICES`).
+
+```text
+[1/4] Reading image …
+      ↳ 1440×900px
+[1/4] Reading image ✓ (0.0s)
+[2/4] Locating 1 annotation(s) ✓ (7.7s)
+[3/4] Refining 1 box(es) ✓ (5.9s)
+[4/4] Rendering & saving ✓ (0.1s)
+
+Run summary:
+  requests : 2
+  tokens   : 6,918 (5,419 in, 1,499 out, 3,486 cached)
+  cost     : ≈ $0.0054 (est.)
+  time     : 13.6s
+```
+
 ```text
 $ python annotate.py --image tests/screens/test_2.webp \
     --output tests/rendered/test_2.png \
@@ -203,9 +225,10 @@ $ jq '.annotations[0].bbox' result.json
 | `--font PATH` | system default | Path to a TrueType font file. |
 | `--no-refine` | off | Skip the per‑bbox refinement pass (faster, less accurate). |
 | `--steps[=N]` | off (`N=1` when bare, max 4) | Run up to `N` review/correction passes after the first render. Each pass inspects the drawn image plus full JSON and, if needed, returns corrected pixel bboxes that the renderer redraws before the next pass. The loop stops early as soon as a pass accepts the result. `--steps`/`--steps=1` matches the old single-pass behavior; `--steps=4` allows up to four (the max). Slower. |
-| `--crop` | off | After annotating, ask the model for a focus region around the drawn annotations **plus the related, important surrounding visuals** (the card/panel/section/headers they belong to) and crop the output PNG to it. The crop is unioned with every drawn box/label and padded generously, so it never clips an annotation and never looks tight. One extra LLM call. |
+| `--crop` | off | Crop **first**, before locating anything: the model picks a focus region holding all the requested targets **plus the related surrounding visuals** (the card/panel/section/headers they belong to) from the request text, the source image is cropped to it (padded generously so it never looks tight), and the whole locate/refine/render pipeline then runs on that smaller crop. This greatly improves bbox accuracy on large or tall screenshots, where the model loses spatial precision on the full image. Result coordinates are in the cropped image's space. One extra LLM call up front; falls back to the full image if no usable region comes back. |
 | `--no-arrow` | off | Never draw arrows. Arrows are on by default for any labeled annotation that sits apart from its target; this flag suppresses them all. The model does not decide arrows. |
 | `--allow-unresolved` | off | Exit `0` even if the model couldn't resolve some queries. Default exit is `1`. |
+| `--progress` / `--no-progress` | on | Stream per‑stage progress (`[current/total]`, status, timing) and the end‑of‑run usage summary (requests, tokens, est. cost, time) to stderr. On by default; `--no-progress` silences both. stdout stays pure JSON either way. |
 
 ---
 
@@ -235,6 +258,7 @@ result = annotate(
     crop_padding=0.12,
     draw_arrows=True,
     steps=0,                    # review/correction passes; >0 enables, stops early on accept
+    on_progress=print,          # callable(str) for per-stage + summary lines; None = silent
 )
 
 # AnnotationResult is a Pydantic model — JSON-shaped:
@@ -413,6 +437,8 @@ screenshot-marker/
 │   ├── parser.py           # JSON → typed annotations + sanity check
 │   ├── drawing.py          # Pillow rendering: outline, arrow, label, bg
 │   ├── models.py           # Pydantic schemas
+│   ├── progress.py         # Per-stage streaming progress reporter
+│   ├── usage.py            # Token/request/cost accounting + price table
 │   └── config.py           # Provider/auth/model resolution + env loading
 ├── tests/
 │   ├── screens/            # Source screenshots
